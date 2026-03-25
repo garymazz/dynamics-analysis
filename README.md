@@ -1,4 +1,4 @@
-# DMD GPU Profiler (v9.3.32)
+# DMD Tool (v9.3.32)
 
 A high-performance, GPU-accelerated framework for time-series forecasting and structural analysis using Dynamic Mode Decomposition (DMD).
 
