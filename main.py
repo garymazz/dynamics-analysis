@@ -1,10 +1,10 @@
-
 import os
 import signal
 from cement import App
 from controllers.base import BaseController
 from controllers.hdf5_tools import HDF5Controller
 from controllers.analysis_tools import AnalysisController
+from controllers.cluster_tools import ClusterController  # <-- NEW IMPORT
 
 def handle_signals(app, signum, frame):
     if getattr(app, 'shutdown_initiated', False):
@@ -22,7 +22,8 @@ class DMDProfilerApp(App):
         handlers = [
             BaseController,
             HDF5Controller,
-            AnalysisController
+            AnalysisController,
+            ClusterController  # <-- NEW REGISTRATION
         ]
         catch_signals = None
 

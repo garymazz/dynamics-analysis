@@ -13,19 +13,37 @@ class IOManager:
         self.results_buffer = []
         self.temp_file = f"{self.output_base}_temp.csv"
 
-    @staticmethod
-    def load_data(file_path, channel_names):
-        """Loads data from Parquet or Excel and maps columns to requested channels."""
+@staticmethod
+    def load_data(file_path, channel_names, time_col=None, start_time=None, end_time=None):
+        """Loads data, maps channels, and optionally filters by TimeIntervals."""
+        import pandas as pd
+        
         if file_path.endswith(".parquet"):
             df = pd.read_parquet(file_path)
         else:
             df = pd.read_excel(file_path, header=None)
 
+        # Time Interval Filtering
+        if time_col is not None:
+            try:
+                # Assuming time_col is the column name or index
+                col_idx = int(time_col) if str(time_col).isdigit() else time_col
+                df['__parsed_time'] = pd.to_datetime(df.iloc[:, col_idx] if isinstance(col_idx, int) else df[col_idx])
+                
+                if start_time:
+                    df = df[df['__parsed_time'] >= pd.to_datetime(start_time)]
+                if end_time:
+                    df = df[df['__parsed_time'] <= pd.to_datetime(end_time)]
+                    
+                df = df.drop(columns=['__parsed_time']).reset_index(drop=True)
+                print(f"[Info] TimeInterval filter applied. Rows remaining: {len(df)}")
+            except Exception as e:
+                print(f"[Warning] Failed to parse TimeIntervals: {e}")
+
+        # Channel Mapping
         num_requested = len(channel_names)
         if df.shape[1] < num_requested:
-            raise ValueError(
-                f"Input file has {df.shape[1]} columns, but {num_requested} channels were requested."
-            )
+            raise ValueError(f"Input file has {df.shape[1]} columns, but {num_requested} channels requested.")
 
         selected_indices = []
         for ch in channel_names:
