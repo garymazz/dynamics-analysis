@@ -1,4 +1,7 @@
 __pycache__/
+core/__pycache__/
+controllers/__pycache__/
+*.pyc
 *.csv
 *.xlsx
 *.parquet
