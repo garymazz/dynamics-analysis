@@ -2,7 +2,11 @@
 
 A high-performance, GPU-accelerated framework for time-series forecasting and structural analysis using Dynamic Mode Decomposition (DMD).
 
-Built on the **Cement CLI Framework** and **PyTorch**, this application provides a robust suite of tools for sweeping DMD hyperparameters, detecting dominant temporal periods, running smart ensemble forecasts, and managing large-scale matrix decompositions via fault-tolerant HDF5 storage.
+This application provides a robust suite of tools for sweeping DMD hyperparameters, detecting dominant temporal periods, running smart ensemble forecasts, and managing large-scale matrix decompositions. You provide it with multi-channel time-series data (like sensor readings or financial metrics), and it rapidly sweeps through thousands of combinations of "Window Sizes" (how much history to look at) and "Stack Sizes" (Hankle Time-Delay Embedding depths).
+
+The forecasting pipeline uses one GPU to calculate the mathematical dynamics of the system, predicts the next state, compares it to the actual data to calculate error metrics, and outputs the results in flat tabular files (Parquet/Excel) alongside highly granular, AI-agent-ready HDF5 mathematical tensors.
+
+---
 
 ## Key Features
 
@@ -16,8 +20,7 @@ Built on the **Cement CLI Framework** and **PyTorch**, this application provides
 
 ## System Architecture
 
-The codebase has been decoupled from a monolithic script into a scalable MVC-like structure using Cement:
-
+Built on the **Cement CLI Framework** and **PyTorch**, The codebase has been decoupled from a monolithic script into a scalable MVC-like structure using Cement:
 
 dmd_profiler/
 ├── main.py                 # Application bootstrap and global signal handlers
@@ -27,10 +30,9 @@ dmd_profiler/
 │   ├── hdf5_manager.py     # HDF5 schema generation, injection, and diagnostics
 │   └── period_analysis.py  # Algorithms for dominant period gap detection
 └── controllers/            # Cement CLI Routing and Argument Parsing
-    ├── base.py             # Default execution (Standard Sweeps & Cluster-DMD)
-    ├── hdf5_tools.py       # Sub-commands for HDF5 repair and inspection
-    └── analysis_tools.py   # Sub-commands for standalone period analysis
-
+├── base.py             # Default execution (Standard Sweeps & Cluster-DMD)
+├── hdf5_tools.py       # Sub-commands for HDF5 repair and inspection
+└── analysis_tools.py   # Sub-commands for standalone period analysis
 
 ## Installation
 
@@ -51,6 +53,94 @@ Install the required packages via pip:
 
 The application utilizes a Git-like command-line interface with nested sub-commands.
 
+## Subfunction Details
+
+This section details the internal mechanics of each subfunction, the valid bounds for their parameters, and the critical rules governing how those parameters interact (Inter-Parameter Constraints).
+
+---
+
+### 1. Base Profiler (Main Sweep & Forecasting)
+**Description:** The core mathematical engine of the application. It embeds 1D time-series data into high-dimensional Hankel matrices, performs SVD and DMD, and generates forecasted states. It handles both iterative hyperparameter sweeps and massive parallel 3D tensor batching.
+
+**Workflow:**
+1. Parses CLI inputs and checks for an interrupted run state (`--resume`).
+2. Loads the target data slice from Parquet or Excel.
+3. Executes pre-flight validation to ensure matrix mathematical viability.
+4. Routes data to either the Sequential Loop or the Batched Tensor Engine.
+5. Executes the DMD stages: Embed $\to$ SVD $\to$ Operator $\to$ Modes $\to$ Predict.
+6. Emits targeted mathematical stages to isolated HDF5 files.
+7. Flushes forecast error metrics to a temporary CSV buffer, merging to Parquet/XLSX upon completion.
+
+**Valid Parameter Ranges:**
+* `--start-row`: $\ge 1$ (Default: `1`).
+* `--end-row`: $\ge$ `--start-row` (Default: Final row of dataset).
+* `--min-stack`: $\ge 2$ (Default: `5`).
+* `--max-stack`: $>$ `--min-stack` (Default: `41`).
+* `--min-window`: $\ge$ `--max-stack` (Default: `20`).
+* `--max-window`: $>$ `--min-window` (Default: `151`).
+* `--hdf5`: Array strings `['hankle', 'svd', 'dmd-op', 'eigen', 'dmd-modes', 'dmd_amp', 'pred', 'all']` (Default: `[]`).
+
+**Inter-Parameter Constraints (CRITICAL):**
+* **The Stack Boundary Constraint:** The distance between your Start Row and End Row (`end_row - start_row`) **must** be equal to or greater than the `--min-stack` size. If it is smaller, a Hankel matrix cannot be mathematically formed, and the application will abort with a pre-flight validation warning.
+* **Batch Mode Historical Constraint:** When using `--batch-mode`, `--max-window` dictates the fixed window size. To predict the target `--start-row`, there must be at least `max-window` historical rows available *before* the start row in the source file.
+* **Dynamic Max Stack Scaling:** If `--inc-start` is provided without an explicit `--max-stack`, the engine will automatically cap the maximum stack size at half the distance of the active row span (`(end_row - start_row) // 2`) to prevent non-sensical tall/skinny matrix embeddings.
+
+---
+
+### 2. Analysis Tools (Period Detection)
+**Description:**
+A pre-processing signal analyzer that detects dominant temporal frequencies in the dataset. This helps users narrow down optimal Window Sizes for the main DMD Profiler by identifying the natural "pulse" of the data.
+
+**Workflow:**
+1. Loads requested data channels.
+2. Applies a Fast Fourier Transform (FFT) to convert the time-domain signal to the frequency domain.
+3. Computes Autocorrelation to verify repeating cyclical gaps.
+4. Filters results through Peak Detection algorithms to output the top resonant frequencies.
+
+**Valid Parameter Ranges:**
+* `--min-period`: Integer $\ge 2$ (Default: `2`).
+* `--max-period`: Integer $\le$ Total rows in dataset.
+
+**Inter-Parameter Constraints:**
+* **Band-Pass Filtering:** `--max-period` must be strictly greater than `--min-period`. 
+* **Nyquist Limit:** A period of `1` cannot be detected. The `--min-period` is hard-limited to 2 to satisfy the Nyquist-Shannon sampling theorem (requiring at least two data points to establish a cycle).
+
+---
+
+### 3. Cluster Tools
+**Description:**
+Segments historical system behaviors into distinct dynamic "regimes" using K-Means clustering. Useful for labeling periods of high volatility versus stability prior to routing them into the DMD engine.
+
+**Workflow:**
+1. Extracts rolling features (mean, variance, volatility) from the target channels over a sliding window.
+2. Standardizes the extracted features to a mean of 0 and standard deviation of 1.
+3. Executes the K-Means algorithm.
+4. Appends a new `Cluster_Label` column to the dataset and outputs the file.
+
+**Valid Parameter Ranges:**
+* `--n-clusters`: Integer $\ge 2$ (Default: `3`).
+* `--rolling-window`: Integer $\ge 2$ (Default: `10`).
+
+**Inter-Parameter Constraints:**
+* **Feature Viability:** The size of the dataset must be substantially larger than the `--rolling-window` and `--n-clusters` combined, otherwise the algorithm will lack sufficient distinct data points to form meaningful centroids.
+
+---
+
+### 4. HDF5 Diagnostics & Repair (`hdf5`)
+**Description:**
+A suite of tools for reading and managing the Ultra-Granular HDF5 tensor outputs. Designed primarily to help downstream AI Agents ingest the self-describing schemas.
+
+**Workflow:**
+1. Mounts the target `.hdf5` file in read-only mode.
+2. Extracts global dictionary attributes.
+3. Parses the embedded `hierarchical_schema` JSON.
+4. Formats and prints the schema definition to standard output.
+
+**Valid Parameters:**
+* `<target_path>`: String representation of a valid file path or directory (Required).
+
+**Inter-Parameter Constraints:**
+* If `<target_path>` points to a directory instead of a file, the tool will automatically crawl the directory to find the first `.hdf5` file to extract the shared global schema.
 
 ### Standard Parameter Sweeps (Base Controller)
 
@@ -70,9 +160,7 @@ Bash
 
 * -i, --input: Source data file (.xlsx or .parquet).
 * --channels: Channels to analyze (Default: S1 S2 S3 S4 S5).
-
 * --hdf5-all: Save full Eigendecomposition and DMD Operators to the output HDF5 file.
-
 * --svd-gpu: Force SVD calculations to run on the GPU if available.
 
 ### Cluster-DMD Forecasting
@@ -122,7 +210,7 @@ The application expects continuous time-series data without headers.
 The application implements custom SIGINT and SIGTERM handling to protect your data during long sweeps:
 
 1. First`Ctrl+C`: Sets an internal application flag. The math engine will finish its current tensor operation, write the buffers safely to disk, and exit cleanly.
-1. Second`Ctrl+C`: Forces an immediate`os._exit(1)`. Use this only if a PyTorch C-extension or HDF5 thread has completely deadlocked the Python GIL and is unresponsive to the first interrupt.
+2. Second`Ctrl+C`: Forces an immediate`os._exit(1)`. Use this only if a PyTorch C-extension or HDF5 thread has completely deadlocked the Python GIL and is unresponsive to the first interrupt.
 
 ## Extending the Framework
 
