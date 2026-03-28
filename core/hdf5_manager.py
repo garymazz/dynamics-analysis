@@ -5,7 +5,7 @@ import numpy as np
 
 # Core Application Constants
 SCRIPT_VERSION = "9.3.32"
-SCHEMA_VERSION = "2.0.0"  # Incremented for granular atomic schema and exact 1-to-1 routing
+SCHEMA_VERSION = "2.0.0"  # Restored to granular atomic schema and exact 1-to-1 routing
 
 def build_hierarchical_schema():
     """Defines the 7 strict Data Classes and Data Types for the highly granular HDF5 storage."""
@@ -82,6 +82,7 @@ def save_stage_to_hdf5(
     group_name = f"{data_class}_ds_{d_start}_de_{d_end}_ws_{w_start}_we_{w_end}_s_{s}"
 
     # 3. Atomic Write & Flush (with scalar safety check)
+    # Using 'w' to guarantee a fresh, isolated file per hyperparameter combination
     with h5py.File(file_path, "w") as hf:
         hf.attrs["data_set_identifier"] = data_class
         hf.attrs["hierarchical_schema"] = full_schema_json
