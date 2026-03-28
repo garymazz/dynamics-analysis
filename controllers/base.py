@@ -152,7 +152,11 @@ class BaseController(Controller):
         elif args.max_stack is None:
             args.max_stack = 41
 
+        # RESTORED: Generate the list of stacks to sweep
+        stack_range = list(range(args.min_stack, args.max_stack))
+
         print(f"Target Input: {args.input}")
+        print(f"Stack sweep range: {args.min_stack} to {args.max_stack - 1}")
         print(f"Stack sweep range: {args.min_stack} to {args.max_stack - 1}")
 
         # 6. Execute Sweep Logic
