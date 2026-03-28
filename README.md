@@ -84,11 +84,22 @@ This section details the internal mechanics of each subfunction, the valid bound
 * `--max-window`: $>$ `--min-window` (Default: `151`).
 * `--hdf5`: Array strings `['hankle', 'svd', 'dmd-op', 'eigen', 'dmd-modes', 'dmd_amp', 'pred', 'all']` (Default: `[]`).
 
-**Inter-Parameter Constraints (CRITICAL):**
+**Constraints (CRITICAL):**
 * **The Stack Boundary Constraint:** The distance between your Start Row and End Row (`end_row - start_row`) **must** be equal to or greater than the `--min-stack` size. If it is smaller, a Hankel matrix cannot be mathematically formed, and the application will abort with a pre-flight validation warning.
 * **Batch Mode Historical Constraint:** When using `--batch-mode`, `--max-window` dictates the fixed window size. To predict the target `--start-row`, there must be at least `max-window` historical rows available *before* the start row in the source file.
 * **Dynamic Max Stack Scaling:** If `--inc-start` is provided without an explicit `--max-stack`, the engine will automatically cap the maximum stack size at half the distance of the active row span (`(end_row - start_row) // 2`) to prevent non-sensical tall/skinny matrix embeddings.
 
+**Example Commands:**
+```bash
+# Basic Forwards Sweep (Increasing Start Row)
+python main.py --input data.xlsx --inc-start --start-row 1 --end-row 500 --min-stack 5 --max-stack 20
+
+# High-Performance Batched Tensor Workflow (Fixed Window)
+python main.py --input data.parquet --batch-mode --max-window 150 --start-row 200 --end-row 5000
+
+# Resume an Interrupted Run
+python main.py --input data.parquet --resume
+```
 ---
 
 ### 2. Analysis Tools (Period Detection)
@@ -105,10 +116,14 @@ A pre-processing signal analyzer that detects dominant temporal frequencies in t
 * `--min-period`: Integer $\ge 2$ (Default: `2`).
 * `--max-period`: Integer $\le$ Total rows in dataset.
 
-**Inter-Parameter Constraints:**
+**Constraints:**
 * **Band-Pass Filtering:** `--max-period` must be strictly greater than `--min-period`. 
 * **Nyquist Limit:** A period of `1` cannot be detected. The `--min-period` is hard-limited to 2 to satisfy the Nyquist-Shannon sampling theorem (requiring at least two data points to establish a cycle).
 
+**Example Command:**
+```bash
+python main.py analysis period sweep_results.parquet --channel S1
+```
 ---
 
 ### 3. Cluster Tools
@@ -125,12 +140,16 @@ Segments historical system behaviors into distinct dynamic "regimes" using K-Mea
 * `--n-clusters`: Integer $\ge 2$ (Default: `3`).
 * `--rolling-window`: Integer $\ge 2$ (Default: `10`).
 
-**Inter-Parameter Constraints:**
+**Constraints:**
 * **Feature Viability:** The size of the dataset must be substantially larger than the `--rolling-window` and `--n-clusters` combined, otherwise the algorithm will lack sufficient distinct data points to form meaningful centroids.
 
+**Example Command:**
+```bash
+python main.py cluster --input data.parquet --n-clusters 4
+```
 ---
 
-## 4. Ultra-Granular HDF5 Output (Schema v2.0.0)
+### 4. Ultra-Granular HDF5 Output (Schema v2.0.0)
 
 To support massive hyperparameter sweeps and downstream Machine Learning workflows, this application utilizes an "Ultra-Granular 1-to-1" HDF5 storage strategy. 
 
@@ -162,7 +181,8 @@ Embedded JSON Schemas: Every single .hdf5 file contains an embedded global attri
 
 Batch Mode Consolidation: When using the standard sequential sweep, each time-step and stack size gets an individual atomic file. However, if you enable --batch-mode, the application smartly consolidates the data, outputting exactly ONE file per stack size that contains the entire multi-dimensional 3D batch tensor, preventing file-system bloat while preserving the 1-to-1 isolation.
 
-Fault-Tolerant: Because files are written atomically at the end of a mathematical calculation, a system crash will never corrupt the historical data you have already generated.---
+Fault-Tolerant: Because files are written atomically at the end of a mathematical calculation, a system crash will never corrupt the historical data you have already generated.
+---
 ### 5. HDF5 Diagnostics & Repair (`hdf5`)
 **Description:**
 A suite of tools for reading and managing the Ultra-Granular HDF5 tensor outputs. Designed primarily to help downstream AI Agents ingest the self-describing schemas.
@@ -184,14 +204,13 @@ A suite of tools for reading and managing the Ultra-Granular HDF5 tensor outputs
 The default execution mode runs heavy matrix sweeps across a range of window and stack sizes.
 
 **#### Basic Forwards Sweep (Increasing Start Row):**
-
-Bash
-`python main.py --input data.xlsx --inc-start --start-row 1 --end-row 500 --min-stack 5 --max-stack 20`
-
+```bash
+python main.py --input data.xlsx --inc-start --start-row 1 --end-row 500 --min-stack 5 --max-stack 20`
+```
 **#### Basic Backwards Sweep (Decreasing End Row):**
-
-**Bash**
-`python main.py --input data.parquet --dec-end --min-window 20 --max-window 150 --hdf5-all`
+```bash
+python main.py --input data.parquet --dec-end --min-window 20 --max-window 150 --hdf5-all`
+```
 
 **Key Arguments:**
 
@@ -204,43 +223,85 @@ Bash
 
 Enable the "Smart Mode" to automatically optimize window/stack sizes based on historical error thresholds and generate future predictions.
 
-**Bash**
+```bash
 `python main.py --input data.xlsx --cluster-dmd --forecast-row 1000 --min-window 50 --max-window 200`
-
+```
 ### HDF5 Diagnostics & Repair (hdf5 sub-command)
 
 Because large SVD sweeps can generate massive HDF5 files, the application includes tools to inspect and repair files corrupted by hard crashes or power loss.
 
 #### Print the self-describing hierarchical schema of a file:
 
-**Bash**
-`python main.py hdf5 schema output_svd.hdf5`
-
+```bash
+python main.py hdf5 schema output_svd.hdf5`
+```
 ### Inspect a file for truncated B-Trees or corrupt configurations:
 
-**Bash**
-`python main.py hdf5 inspect output_svd.hdf5`
-
+```bash
+python main.py hdf5 inspect output_svd.hdf5`
+```
 #### Safely truncate and repair corrupt entries at the tail of a file:
 
-**Bash**
-`python main.py hdf5 fix output_svd.hdf5`
-
+```bash
+python main.py hdf5 fix output_svd.hdf5`
+```
 #### Post-Processing Analysis (analysis sub-command)
 
 Run standalone analysis on generated sweep data.
 
 **Detect dominant temporal periods from a previous parameter sweep:**
 
-Bash
-`python main.py analysis period sweep_results.parquet --channel S1`
-
+```bash
+python main.py analysis period sweep_results.parquet --channel S1`
+```
 ## Data Input Requirements
 
 The application expects continuous time-series data without headers.
 
 * Excel (.xlsx): Read with no headers. Columns are mapped sequentially to requested channels (e.g., Column 0 is S1, Column 1 is S2).
 * Parquet (.parquet): Fast, compressed columnar storage. Preferred for large datasets.
+
+### Input Data Schema & Parameter Mapping
+
+The core mathematical engine treats your input file as a dense, 2D numerical matrix where **Rows = Time** and **Columns = Variables**. Understanding this schema is critical for accurately configuring your command-line parameters.
+
+#### 1. Rows (Temporal Snapshots)
+Every row in your dataset must represent a single, sequential snapshot in time (e.g., $t_0, t_1, t_2$). There should be no missing rows or gaps in the time-series.
+* The `--start-row` and `--end-row` CLI parameters act as a vertical data slicer. They dictate the exact contiguous block of time-steps the engine will extract into memory to build the Hankel matrices.
+* **Example:** Passing `--start-row 100 --end-row 500` tells the engine to isolate those specific 401 snapshots. If you are using `--batch-mode` with `--max-window 150`, the engine uses rows 100 through 249 to predict row 250, then shifts down one row at a time until it reaches row 500.
+
+#### 2. Columns (State Variables / Channels)
+Every column represents a distinct feature, sensor, or mathematical state variable. Because the application explicitly expects **headerless** data files, the columns are mapped positionally from left to right.
+* The `--channels` argument is mapped sequentially to the column indices (0-indexed) of your input file.
+* **Example:** If your dataset has 5 columns, but you pass `--channels Temp Pressure Velocity`, the engine maps them exactly in order:
+  * **Column 0:** Maps to `Temp`
+  * **Column 1:** Maps to `Pressure`
+  * **Column 2:** Maps to `Velocity`
+* Any remaining columns in your dataset (Columns 3 and 4) are safely ignored by the matrix embedding phase, allowing you to feed wide datasets into the profiler while only analyzing specific subsets of variables.
+
+## Data Outputs
+
+While the pure mathematical tensors (SVD, Eigenvalues, DMD Modes) are exported to the isolated HDF5 directories, the primary forecasting results and error metrics are exported to flat, tabular files. 
+
+Controlled by the `--format` argument (`parquet`, `xlsx`, or `both`), the application generates a comprehensive summary file containing the exact predictions and error rates for every single row and hyperparameter combination tested during the sweep.
+
+### The Tabular Record Schema
+Each row in the output file represents a single prediction generated by a specific Window/Stack combination. The columns are structured as follows:
+
+**1. Sweep Metadata**
+* `data_set_start` / `data_set_end`: The specific historical slice of rows used to build the Hankel matrix for this prediction.
+* `window_size`: The temporal lookback window ($w$) used.
+* `stack_size`: The Time-Delay Embedding depth ($s$) used.
+* `rank_ratio`: The truncation threshold used during SVD (Default: 0.99).
+
+**2. Channel Forecasting Metrics**
+For every channel requested (e.g., if you passed `--channels S1 S2`), the output dynamically generates a suite of prediction columns:
+* `{channel}_val_target`: The actual ground-truth value from the dataset at the target row.
+* `{channel}_pred_value`: The raw, continuous float prediction calculated by the DMD operator.
+* `{channel}_pred_err`: The absolute error ($| \text{target} - \text{prediction} |$).
+* `{channel}_err_pct`: The percentage error relative to the target value.
+
+*(Note: The engine also generates `_int` appended columns for each metric, which provide rounded integer values for discrete state tracking).*
 
 ## Graceful Termination
 
