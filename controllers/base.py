@@ -122,18 +122,35 @@ class BaseController(Controller):
                 )
             hdf5_callback = _hdf5_injector
 
-        # 5. Core Execution Setup
+# 5. Core Execution Setup
         abort_check = lambda: getattr(self.app, 'shutdown_initiated', False)
         
         end_row = args.end_row if args.end_row is not None else len(full_data_matrix) - 1
+        
+        # --- NEW PRE-FLIGHT VALIDATION CHECK ---
+        row_diff = end_row - args.start_row
+        if row_diff < args.min_stack:
+            start_lbl = "Default" if args.start_row == 1 else "User-Provided"
+            end_lbl = "Default" if args.end_row is None else "User-Provided"
+            stack_lbl = "Default" if args.min_stack == 5 else "User-Provided"
+            
+            print(f"\n[WARNING] Prediction Analysis can not be calculated")
+            print(f"The data window (Start Row to End Row) is smaller than the Minimum Stack Size.")
+            print(f"To perform this analysis, the Start to End row difference must be equal to or greater than the Minimum Stack Size.\n")
+            print(f"Current Configuration:")
+            print(f"  • Start Row: {args.start_row} ({start_lbl})")
+            print(f"  • End Row: {end_row} ({end_lbl})")
+            print(f"  • Row Difference: {row_diff}")
+            print(f"  • Min Stack Size: {args.min_stack} ({stack_lbl})\n")
+            print(f"Please adjust your --start-row, --end-row, or --min-stack arguments.")
+            return
+        # ---------------------------------------
         
         if args.inc_start and args.max_stack is None:
             span = end_row - args.start_row
             args.max_stack = max(args.min_stack + 1, span // 2)
         elif args.max_stack is None:
             args.max_stack = 41
-            
-        stack_range = list(range(args.min_stack, args.max_stack))
 
         print(f"Target Input: {args.input}")
         print(f"Stack sweep range: {args.min_stack} to {args.max_stack - 1}")
