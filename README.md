@@ -21,21 +21,25 @@ The forecasting pipeline uses one GPU to calculate the mathematical dynamics of 
 ## System Architecture
 
 Built on the **Cement CLI Framework** and **PyTorch**, The codebase has been decoupled from a monolithic script into a scalable MVC-like structure using Cement:
-
-dmd_profiler/
+```
+dmd_profiler/ 
+├── .gitignore              # Git ignore rules for cached files and temp data
+├── README.md               # Project documentation, architecture, and usage guide
 ├── main.py                 # Application bootstrap and global signal handlers
 ├── core/                   # Framework-agnostic business logic
-│   ├── math_engine.py      # Pure PyTorch SVD/DMD tensor mathematics
-│   ├── io_manager.py       # Pandas data loading, buffering, and Parquet/Excel exporting
-│   ├── hdf5_manager.py     # HDF5 schema generation, injection, and diagnostics
-│   └── period_analysis.py  # Algorithms for dominant period gap detection
+│   ├── cluster_engine.py   # K-Means clustering logic for dynamic behaviors
+│   ├── hdf5_manager.py     # 1-to-1 Ultra-Granular HDF5 schema generation and injection
+│   ├── io_manager.py       # Pandas data loading, buffering, state-resume, and exporting
+│   ├── math_engine.py      # PyTorch SVD/DMD tensor math (Sequential & 3D Batched Workflows)
+│   ├── period_analysis.py  # Algorithms for dominant period gap detection
+│   └── reporter.py         # Reporting and logging utilities
 └── controllers/            # Cement CLI Routing and Argument Parsing
-├── base.py             # Default execution (Standard Sweeps & Cluster-DMD)
-├── hdf5_tools.py       # Sub-commands for HDF5 repair and inspection
-└── analysis_tools.py   # Sub-commands for standalone period analysis
-
+    ├── analysis_tools.py   # Sub-commands for standalone period analysis
+    ├── base.py             # Default execution (Standard Sweeps & Batched Tensor Workflow)
+    ├── cluster_tools.py    # Sub-commands for behavior clustering
+    └── hdf5_tools.py       # Sub-commands for HDF5 repair and inspection
+```    
 ## Installation
-
 **Prerequisites**
 
 * Python 3.8+
