@@ -38,7 +38,7 @@ class ClusterController(Controller):
         ]
 
     @ex(hide=True)
-    def default(self):
+    def _default(self):
         """CLI Routing for: python main.py cluster ..."""
         args = self.app.pargs
         
