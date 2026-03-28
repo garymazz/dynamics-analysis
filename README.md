@@ -130,7 +130,40 @@ Segments historical system behaviors into distinct dynamic "regimes" using K-Mea
 
 ---
 
-### 4. HDF5 Diagnostics & Repair (`hdf5`)
+## 4. Ultra-Granular HDF5 Output (Schema v2.0.0)
+
+To support massive hyperparameter sweeps and downstream Machine Learning workflows, this application utilizes an "Ultra-Granular 1-to-1" HDF5 storage strategy. 
+
+Instead of dumping all data into a single, highly-fragmented monolithic file (which is prone to corruption during power loss), the engine completely isolates every stage of the mathematical pipeline into its own dedicated directory and self-describing file. This ensures that the data is perfectly structured for Agentic AI ingestion and cross-team sharing.
+
+### HDF5 Directory Layout
+
+When you run a sweep with the `--hdf5 all` flag (or specific targets), the application generates a root folder based on your `--output` name. Inside, it builds 7 distinct sub-directories mapping directly to the mathematical stages of the Dynamic Mode Decomposition pipeline.
+
+```text
+<output_prefix>_hdf5/
+├── Hankle/                  # Target: `hankle`
+│   └── window_<w>_stack_<s>.hdf5   (Contains: H_batch, X_batch, Y_batch)
+├── SVD_Truncation/          # Target: `svd`
+│   └── window_<w>_stack_<s>.hdf5   (Contains: U, S, Vh, Truncated r)
+├── Reduced_Operator/        # Target: `dmd-op`
+│   └── window_<w>_stack_<s>.hdf5   (Contains: Atilde)
+├── Eigen/                   # Target: `eigen`
+│   └── window_<w>_stack_<s>.hdf5   (Contains: Continuous & Discrete Eigenvalues)
+├── DMD_Modes/               # Target: `dmd-modes`
+│   └── window_<w>_stack_<s>.hdf5   (Contains: Exact spatial/dynamic modes (Phi))
+├── DMD_Amplitudes/          # Target: `dmd_amp`
+│   └── window_<w>_stack_<s>.hdf5   (Contains: Mode amplitudes (b))
+└── Prediction/              # Target: `pred`
+    └── window_<w>_stack_<s>.hdf5   (Contains: The final forecasted real-value vectors)
+```
+#### Key HDF5 Features
+Embedded JSON Schemas: Every single .hdf5 file contains an embedded global attribute called hierarchical_schema. This acts as an internal blueprint, allowing any script (or AI agent) to read the file and instantly understand exactly what datasets, data types, and matrix shapes are inside without having to guess.
+
+Batch Mode Consolidation: When using the standard sequential sweep, each time-step and stack size gets an individual atomic file. However, if you enable --batch-mode, the application smartly consolidates the data, outputting exactly ONE file per stack size that contains the entire multi-dimensional 3D batch tensor, preventing file-system bloat while preserving the 1-to-1 isolation.
+
+Fault-Tolerant: Because files are written atomically at the end of a mathematical calculation, a system crash will never corrupt the historical data you have already generated.---
+### 5. HDF5 Diagnostics & Repair (`hdf5`)
 **Description:**
 A suite of tools for reading and managing the Ultra-Granular HDF5 tensor outputs. Designed primarily to help downstream AI Agents ingest the self-describing schemas.
 
