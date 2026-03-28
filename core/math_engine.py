@@ -107,28 +107,18 @@ def format_record(pred_vec_real: torch.Tensor, target_vals, channel_names: list,
 
 
 # ==========================================
-# ORCHESTRATORS
+# ORCHESTRATORS (Inside core/math_engine.py)
 # ==========================================
 
 def process_window_group(
-    local_data,
-    rec_type,
-    target_vals,
-    d_start,
-    d_end,
-    w,
-    stack_list,
-    channel_names,
-    abort_check=None,
-    record_callback=None,
-    hdf5_callback=None,
-    svd_store_hankel=False,
-    svd_no_modes=False,
-    svd_gpu=False,
-    hdf5_dmd=False,
-    hdf5_eigen=False,
+    local_data, rec_type, target_vals, d_start, d_end, w, stack_list, channel_names,
+    abort_check=None, record_callback=None, hdf5_callback=None, svd_gpu=False, hdf5_targets=None,
 ):
     results = []
+    
+    # Pre-calculate active HDF5 targets
+    hdf5_targets = hdf5_targets or []
+    write_all = "all" in hdf5_targets
 
     for s in stack_list:
         if abort_check and abort_check():
@@ -138,74 +128,70 @@ def process_window_group(
         H, X, Y = build_hankel_matrix(local_data, w, s)
         if H is None: continue
         
-        if hdf5_callback:
-            hdf5_callback(
-                "Time_Delay_Embedding", d_start, d_end, w, s,
-                {
-                    "H": H.detach().cpu().numpy().astype(np.float32) if svd_store_hankel else None,
-                    "X": X.detach().cpu().numpy().astype(np.float32),
-                    "Y": Y.detach().cpu().numpy().astype(np.float32)
-                }
-            )
+        if hdf5_callback and ("hankle" in hdf5_targets or write_all):
+            hdf5_callback("Hankle", d_start, d_end, w, s, {
+                "H": H.detach().cpu().numpy().astype(np.float32),
+                "X": X.detach().cpu().numpy().astype(np.float32),
+                "Y": Y.detach().cpu().numpy().astype(np.float32)
+            })
 
         # --- Stage 2: SVD ---
         svd_res = compute_svd(X, svd_gpu, DEVICE)
         if svd_res is None: continue
         U, S, Vh, U_r, S_inv, V_r, r = svd_res
         
-        if hdf5_callback:
-            hdf5_callback(
-                "SVD_Truncation", d_start, d_end, w, s,
-                {
-                    "U": U.detach().cpu().numpy().astype(np.float32),
-                    "S": S.detach().cpu().numpy().astype(np.float32),
-                    "Vh": Vh.detach().cpu().numpy().astype(np.float32),
-                    "U_r": U_r.detach().cpu().numpy().astype(np.float32),
-                    "S_inv": S_inv.detach().cpu().numpy().astype(np.float32),
-                    "V_r": V_r.detach().cpu().numpy().astype(np.float32),
-                    "r": np.int32(r)
-                }
-            )
+        if hdf5_callback and ("svd" in hdf5_targets or write_all):
+            hdf5_callback("SVD_Truncation", d_start, d_end, w, s, {
+                "U": U.detach().cpu().numpy().astype(np.float32),
+                "S": S.detach().cpu().numpy().astype(np.float32),
+                "Vh": Vh.detach().cpu().numpy().astype(np.float32),
+                "U_r": U_r.detach().cpu().numpy().astype(np.float32),
+                "S_inv": S_inv.detach().cpu().numpy().astype(np.float32),
+                "V_r": V_r.detach().cpu().numpy().astype(np.float32),
+                "r": np.int32(r)
+            })
 
-        # --- Stage 3: Operator ---
+        # --- Stage 3: Operator & Eigen ---
         Atilde, eigvals, W_eig = compute_dmd_operator(U_r, Y, V_r, S_inv)
         
-        if hdf5_callback and (hdf5_dmd or hdf5_eigen):
-            op_payload = {}
-            if hdf5_dmd:
-                op_payload["Atilde"] = Atilde.detach().cpu().numpy().astype(np.float32)
-            if hdf5_eigen:
-                op_payload.update({
+        if hdf5_callback:
+            if "dmd-op" in hdf5_targets or write_all:
+                hdf5_callback("Reduced_Operator", d_start, d_end, w, s, {
+                    "Atilde": Atilde.detach().cpu().numpy().astype(np.float32)
+                })
+            
+            if "eigen" in hdf5_targets or write_all:
+                hdf5_callback("Eigen", d_start, d_end, w, s, {
                     "eigvals_real": eigvals.real.detach().cpu().numpy().astype(np.float32),
                     "eigvals_imag": eigvals.imag.detach().cpu().numpy().astype(np.float32),
                     "W_eig_real": W_eig.real.detach().cpu().numpy().astype(np.float32),
                     "W_eig_imag": W_eig.imag.detach().cpu().numpy().astype(np.float32)
                 })
-            hdf5_callback("Reduced_Operator", d_start, d_end, w, s, op_payload)
 
-        # --- Stage 4: Modes ---
+        # --- Stage 4: Modes & Amplitudes ---
         x_last = X[:, -1]
         Phi, b = compute_dmd_modes(Y, V_r, S_inv, W_eig, x_last)
         
-        if hdf5_callback and hdf5_eigen and not svd_no_modes:
-            hdf5_callback(
-                "Exact_Modes", d_start, d_end, w, s,
-                {
+        if hdf5_callback:
+            if "dmd-modes" in hdf5_targets or write_all:
+                hdf5_callback("DMD_Modes", d_start, d_end, w, s, {
                     "Phi_real": Phi.real.detach().cpu().numpy().astype(np.float32),
-                    "Phi_imag": Phi.imag.detach().cpu().numpy().astype(np.float32),
+                    "Phi_imag": Phi.imag.detach().cpu().numpy().astype(np.float32)
+                })
+                
+            if "dmd_amp" in hdf5_targets or write_all:
+                hdf5_callback("DMD_Amplitudes", d_start, d_end, w, s, {
                     "b_real": b.real.detach().cpu().numpy().astype(np.float32),
                     "b_imag": b.imag.detach().cpu().numpy().astype(np.float32)
-                }
-            )
+                })
 
         # --- Stage 5: Predict ---
         pred_vec_real = reconstruct_and_predict(Phi, eigvals, b)
         
-        if hdf5_callback:
-            hdf5_callback(
-                "Prediction", d_start, d_end, w, s,
-                {"pred_vec_real": pred_vec_real.detach().cpu().numpy().astype(np.float32)}
-            )
+        if hdf5_callback and ("pred" in hdf5_targets or write_all):
+            hdf5_callback("Prediction", d_start, d_end, w, s, {
+                "pred_vec_real": pred_vec_real.detach().cpu().numpy().astype(np.float32)
+            })
 
         # --- Stage 6: Tabular Output ---
         record = format_record(pred_vec_real, target_vals, channel_names, d_start, d_end, w, s, rec_type)
@@ -216,81 +202,40 @@ def process_window_group(
 
     return results
 
+
 def run_sweeps_gpu_grouped(
-    full_data_matrix,
-    dataset_start_idx,
-    dataset_end_idx,
-    verification_vals,
-    enable_train_rec,
-    channel_names,
-    stack_range,
-    abort_check=None,
-    record_callback=None,
-    hdf5_callback=None,
-    svd_store_hankel=False,
-    svd_no_modes=False,
-    svd_gpu=False,
-    hdf5_dmd=False,
-    hdf5_eigen=False,
+    full_data_matrix, dataset_start_idx, dataset_end_idx, verification_vals, enable_train_rec,
+    channel_names, stack_range, abort_check=None, record_callback=None, hdf5_callback=None,
+    svd_gpu=False, hdf5_targets=None,
 ):
     """Single-window DMD wrapper for sweeping stack sizes."""
     train_full = torch.tensor(full_data_matrix, device=DEVICE, dtype=torch.float32)
     data_len = train_full.shape[0]
 
     w = data_len
-    if data_len < 2:
-        return []
+    if data_len < 2: return []
 
     val_train = train_full[:-1]
     val_targets = train_full[-1, :].cpu().numpy() if enable_train_rec and data_len > 1 else None
     real_targets = verification_vals
 
     valid_stacks = [s for s in stack_range if s < w and (w - s + 1) >= 2]
-    if not valid_stacks:
-        return []
+    if not valid_stacks: return []
 
     all_results = []
 
     if enable_train_rec and val_targets is not None and val_train.shape[0] >= w:
         local_data_val = val_train[-w:, :]
         res = process_window_group(
-            local_data=local_data_val,
-            rec_type="train_rec",
-            target_vals=val_targets,
-            d_start=dataset_start_idx,
-            d_end=dataset_end_idx,
-            w=w,
-            stack_list=valid_stacks,
-            channel_names=channel_names,
-            abort_check=abort_check,
-            record_callback=record_callback,
-            hdf5_callback=hdf5_callback,
-            svd_store_hankel=svd_store_hankel,
-            svd_no_modes=svd_no_modes,
-            svd_gpu=svd_gpu,
-            hdf5_dmd=hdf5_dmd,
-            hdf5_eigen=hdf5_eigen,
+            local_data_val, "train_rec", val_targets, dataset_start_idx, dataset_end_idx, w, valid_stacks,
+            channel_names, abort_check, record_callback, hdf5_callback, svd_gpu, hdf5_targets
         )
         all_results.extend(res)
 
     local_data_real = train_full[-w:, :]
     res = process_window_group(
-        local_data=local_data_real,
-        rec_type="pred_rec",
-        target_vals=real_targets,
-        d_start=dataset_start_idx,
-        d_end=dataset_end_idx,
-        w=w,
-        stack_list=valid_stacks,
-        channel_names=channel_names,
-        abort_check=abort_check,
-        record_callback=record_callback,
-        hdf5_callback=hdf5_callback,
-        svd_store_hankel=svd_store_hankel,
-        svd_no_modes=svd_no_modes,
-        svd_gpu=svd_gpu,
-        hdf5_dmd=hdf5_dmd,
-        hdf5_eigen=hdf5_eigen,
+        local_data_real, "pred_rec", real_targets, dataset_start_idx, dataset_end_idx, w, valid_stacks,
+        channel_names, abort_check, record_callback, hdf5_callback, svd_gpu, hdf5_targets
     )
     all_results.extend(res)
     

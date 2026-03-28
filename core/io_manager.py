@@ -62,10 +62,9 @@ class ConfigManager:
             "inc_start": "--inc-start", "train_rec": "--train-rec", "schema": "--schema",
             "min_stack": "--min-stack", "max_stack": "--max-stack",
             "min_window": "--min-window", "max_window": "--max-window",
-            "no_svd_hdf5": "--no-svd-hdf5", "svd_store_hankel": "--svd-store-hankel",
-            "svd_no_modes": "--svd-no-modes", "svd_gpu": "--svd-gpu",
-            "hdf5_eigen": "--hdf5-eigen", "hdf5_dmd": "--hdf5-dmd", "hdf5_all": "--hdf5-all",
+            "svd_gpu": "--svd-gpu", "hdf5": "--hdf5",
         }
+
         for attr, flag in name_to_flag.items():
             if attr == "resume" or not hasattr(cli_args, attr):
                 continue
