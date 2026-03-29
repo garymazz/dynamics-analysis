@@ -5,7 +5,7 @@ from cement import Controller, ex
 
 # Import our decoupled core modules
 from core.io_manager import IOManager, ConfigManager, get_schema_definition
-from core.math_engine import run_sweeps_gpu_grouped
+from core.math_engine import run_sweeps_gpu_grouped, run_sweeps_gpu_batched
 from core.hdf5_manager import save_stage_to_hdf5, generate_hdf5_dir_name, build_hierarchical_schema, SCRIPT_VERSION
 
 class BaseController(Controller):
@@ -33,6 +33,7 @@ class BaseController(Controller):
             (['--min-window'], {'help': 'Minimum window size', 'type': int, 'default': 20}),
             (['--max-window'], {'help': 'Maximum window size', 'type': int, 'default': 151}),
             (['--svd-gpu'], {'help': 'Force SVD on GPU', 'action': 'store_true', 'default': False}),
+            (['--batch-mode'], {'help': 'Enable highly-optimized 3D tensor batch processing for a fixed window size', 'action': 'store_true', 'default': False}),
         ]
 
     @ex(hide=True)
@@ -157,12 +158,43 @@ class BaseController(Controller):
 
         print(f"Target Input: {args.input}")
         print(f"Stack sweep range: {args.min_stack} to {args.max_stack - 1}")
-        print(f"Stack sweep range: {args.min_stack} to {args.max_stack - 1}")
 
-        # 6. Execute Sweep Logic
+# 6. Execute Sweep Logic
         t0 = time.time()
         
-        if args.inc_start:
+        if args.batch_mode:
+            print(f"\n[INFO] Starting High-Performance Batched Tensor Workflow...")
+            
+            fixed_w = args.max_window
+            
+            # To predict args.start_row, we need fixed_w historical rows before it.
+            slice_start_idx = args.start_row - 1 - fixed_w
+            
+            if slice_start_idx < 0:
+                print(f"[ERROR] Cannot predict row {args.start_row} with a window of {fixed_w}.")
+                print(f"There are only {args.start_row - 1} historical rows available before it.")
+                print(f"To use a window of {fixed_w}, your --start-row must be at least {fixed_w + 1}.")
+                return
+                
+            slice_end_idx = end_row # up to and including the target row index
+            
+            print(f"[INFO] Processing predictions for rows {args.start_row} to {end_row} (Window: {fixed_w})...")
+            
+            data_slice = full_data_matrix[slice_start_idx : slice_end_idx]
+            
+            results = run_sweeps_gpu_batched(
+                full_data_matrix=data_slice,
+                w=fixed_w,
+                stack_list=stack_range,
+                channel_names=args.channels,
+                hdf5_callback=hdf5_callback,
+                hdf5_targets=args.hdf5,
+                global_start_row=args.start_row  # Pass the global row offset
+            )
+            io_mgr.record_callback(results)
+            print(f"Batched processing complete. Generated {len(results)} records in ({time.time() - t0:.1f}s)")
+            
+        elif args.inc_start:
             print(f"Starting Inc Start Sweep (Row {args.start_row} -> {end_row})...")
             curr_start = resume_state["row"] if (args.resume and resume_state) else args.start_row
             target_idx = end_row if end_row < len(full_data_matrix) else len(full_data_matrix) - 1

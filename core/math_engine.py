@@ -240,3 +240,166 @@ def run_sweeps_gpu_grouped(
     all_results.extend(res)
     
     return all_results
+
+# ==========================================
+# BATCHED TENSOR WORKFLOW (HIGH UTILIZATION)
+# ==========================================
+
+def run_sweeps_gpu_batched(
+    full_data_matrix,
+    w: int,
+    stack_list: list,
+    channel_names: list,
+    hdf5_callback=None,
+    hdf5_targets=None,
+    global_start_row=1
+):
+    """
+    Highly optimized 3D Tensor Batched Workflow.
+    Slides a fixed window 'w' across the dataset slice and computes all DMDs simultaneously.
+    """
+    data_tensor = torch.tensor(full_data_matrix, device=DEVICE, dtype=torch.float32)
+    T, C = data_tensor.shape
+    
+    if T < w + 1:
+        return []
+
+    hdf5_targets = hdf5_targets or []
+    write_all = "all" in hdf5_targets
+    all_results = []
+
+    for s in stack_list:
+        if w - s < 1: continue
+
+        # --- Stage 1: Batched 3D Hankel Construction ---
+        windows = data_tensor[:-1].unfold(0, w, 1) 
+        B = windows.shape[0]
+        num_cols = w - s + 1
+        
+        h = windows.unfold(2, s, 1).transpose(2, 3) 
+        # FIX: Force contiguous memory blocks to prevent cuSOLVER copy-overhead
+        H_batch = h.contiguous().view(B, C * s, num_cols)
+        X_batch = H_batch[:, :, :-1].contiguous()
+        Y_batch = H_batch[:, :, 1:].contiguous()
+
+        # --- Stage 2: Batched SVD ---
+        U, S, Vh = torch.linalg.svd(X_batch, full_matrices=False)
+        
+        max_rank = S.shape[-1]
+        r = max(1, int(max_rank * 0.99))
+        
+        U_r = U[:, :, :r].contiguous()
+        S_inv = torch.diag_embed(1.0 / S[:, :r]).contiguous()
+        V_r = Vh[:, :r, :].contiguous()
+
+        # --- Stage 3: Batched Operator ---
+        Atilde = U_r.transpose(1, 2) @ Y_batch @ V_r.transpose(1, 2) @ S_inv
+        eigvals, W_eig = torch.linalg.eig(Atilde)
+
+        # --- Stage 4: Batched Modes & Amplitudes ---
+        Y_c = Y_batch.to(torch.complex64)
+        V_r_c = V_r.transpose(1, 2).to(torch.complex64)
+        S_inv_c = S_inv.to(torch.complex64)
+        
+        Phi = Y_c @ V_r_c @ S_inv_c @ W_eig
+        x_last_c = X_batch[:, :, -1].to(torch.complex64).unsqueeze(-1)
+        
+        # FIX: Use batched Least-Squares instead of Pseudo-Inverse to prevent CPU fallback
+        b = torch.linalg.lstsq(Phi, x_last_c).solution.squeeze(-1)
+
+        # --- Stage 5: Batched Predictions ---
+        pred_vec = Phi @ torch.diag_embed(eigvals) @ b.unsqueeze(-1)
+        pred_vec_real = pred_vec.squeeze(-1).real
+        
+        pred_cpu = pred_vec_real.detach().cpu().numpy()
+
+        # --- Stage 6: Batched HDF5 Saving (Optional) ---
+        if hdf5_callback:
+            batch_d_start = global_start_row - w
+            batch_d_end = global_start_row + B - 2 
+            
+            if "hankle" in hdf5_targets or write_all:
+                hdf5_callback("Hankle", batch_d_start, batch_d_end, w, s, {
+                    "H_batch": H_batch.detach().cpu().numpy().astype(np.float32),
+                    "X_batch": X_batch.detach().cpu().numpy().astype(np.float32),
+                    "Y_batch": Y_batch.detach().cpu().numpy().astype(np.float32)
+                })
+            if "svd" in hdf5_targets or write_all:
+                hdf5_callback("SVD_Truncation", batch_d_start, batch_d_end, w, s, {
+                    "U_batch": U.detach().cpu().numpy().astype(np.float32),
+                    "S_batch": S.detach().cpu().numpy().astype(np.float32),
+                    "Vh_batch": Vh.detach().cpu().numpy().astype(np.float32),
+                    "U_r_batch": U_r.detach().cpu().numpy().astype(np.float32),
+                    "S_inv_batch": S_inv.detach().cpu().numpy().astype(np.float32),
+                    "V_r_batch": V_r.detach().cpu().numpy().astype(np.float32),
+                    "r_batch": np.int32(r)
+                })
+            if "dmd-op" in hdf5_targets or write_all:
+                hdf5_callback("Reduced_Operator", batch_d_start, batch_d_end, w, s, {
+                    "Atilde_batch": Atilde.detach().cpu().numpy().astype(np.float32)
+                })
+            if "eigen" in hdf5_targets or write_all:
+                hdf5_callback("Eigen", batch_d_start, batch_d_end, w, s, {
+                    "eigvals_real_batch": eigvals.real.detach().cpu().numpy().astype(np.float32),
+                    "eigvals_imag_batch": eigvals.imag.detach().cpu().numpy().astype(np.float32),
+                    "W_eig_real_batch": W_eig.real.detach().cpu().numpy().astype(np.float32),
+                    "W_eig_imag_batch": W_eig.imag.detach().cpu().numpy().astype(np.float32)
+                })
+            if "dmd-modes" in hdf5_targets or write_all:
+                hdf5_callback("DMD_Modes", batch_d_start, batch_d_end, w, s, {
+                    "Phi_real_batch": Phi.real.detach().cpu().numpy().astype(np.float32),
+                    "Phi_imag_batch": Phi.imag.detach().cpu().numpy().astype(np.float32)
+                })
+            if "dmd_amp" in hdf5_targets or write_all:
+                hdf5_callback("DMD_Amplitudes", batch_d_start, batch_d_end, w, s, {
+                    "b_real_batch": b.real.detach().cpu().numpy().astype(np.float32),
+                    "b_imag_batch": b.imag.detach().cpu().numpy().astype(np.float32)
+                })
+            if "pred" in hdf5_targets or write_all:
+                hdf5_callback("Prediction", batch_d_start, batch_d_end, w, s, {
+                    "pred_vec_real_batch": pred_cpu.astype(np.float32)
+                })
+
+        # --- Stage 7: Format CSV Records ---
+        for i in range(B):
+            curr_pred_row = global_start_row + i
+            
+            record = {
+                "type": "pred_rec",
+                "data_set_start": curr_pred_row - w,
+                "data_set_end": curr_pred_row - 1,
+                "data_window_size": w,
+                "window_size": w,
+                "stack_size": s,
+                "rank_ratio": 0.99,
+            }
+            
+            p_vec = pred_cpu[i]
+            target_vals = full_data_matrix[i + w]
+            
+            for c_idx, ch in enumerate(channel_names):
+                idx = (c_idx + 1) * s - 1
+                if idx >= len(p_vec): continue
+                
+                pred_val = float(p_vec[idx])
+                p_int = int(round(pred_val))
+                
+                record[f"{ch}_pred_value"] = pred_val
+                record[f"{ch}_pred_value_int"] = p_int
+                
+                if target_vals is not None:
+                    tgt = float(target_vals[c_idx])
+                    t_int = int(tgt)
+                    record[f"{ch}_val_target"] = tgt
+                    record[f"{ch}_pred_err"] = abs(pred_val - tgt)
+                    record[f"{ch}_err_pct"] = (abs(pred_val - tgt) / max(1.0, abs(tgt))) * 100.0
+                    record[f"{ch}_val_target_int"] = t_int
+                    record[f"{ch}_pred_err_int"] = abs(p_int - t_int)
+                    record[f"{ch}_err_pct_int"] = (abs(p_int - t_int) / max(1.0, abs(t_int))) * 100.0
+                else:
+                    for suffix in ["val_target", "pred_err", "err_pct", "val_target_int", "pred_err_int", "err_pct_int"]:
+                        record[f"{ch}_{suffix}"] = None
+            
+            all_results.append(record)
+
+    return all_results
