@@ -265,6 +265,26 @@ When you run a sweep with the `--hdf5 all` flag (or specific targets), the appli
 └── Prediction/              # Target: `pred`
     └── window_<w>_stack_<s>.hdf5   (Contains: The final forecasted real-value vectors)
 ```
+#### HDF5 File Naming Convention
+To ensure that every mathematical stage is perfectly traceable and isolated, the application uses a highly specific, coordinate-based naming convention for all generated HDF5 files.
+
+When a mathematical tensor is saved, it is placed into a directory corresponding to its Data Class (e.g., Hankle, SVD_Truncation). The file itself is named using the exact hyperparameter coordinates that generated it.
+
+The file naming schema follows this exact format:
+ds[Data Start]de[Data End]ws[Window Start]we[Window End]s[Stack Size].hdf5
+
+Here is what each variable in the file name represents:
+- `ds` (Data Start): The starting row of the broader historical data slice being evaluated (`d_start`).
+- `de` (Data End): The final row of the broader historical data slice (d_end).
+- `ws` (Window Start): The calculated starting row of the specific lookback window (`d_end` - `w`).
+- `we` (Window End): The end of the lookback window (which mirrors the Data End).
+- `s` (Stack Size): The Time-Delay Embedding depth used to construct the Hankel matrix.
+
+For example, a file named `_ds_100_de_500_ws_350_we_500_s_20.hdf5` inside the `SVD_Truncation` folder tells you exactly that this file contains the matrices for a dataset evaluated from row 100 to 500, using a lookback window starting at row 350 (a window size of 150), and a stack size of 20.
+
+Additionally, the internal HDF5 Group Name holding the tensor data safely mirrors this exact coordinate convention, prefixed with the Data Class (e.g., SVD_Truncation_ds_100_de_500_ws_350_we_500_s_20).
+
+
 #### 3. HDF5 Diagnostics & Repair (`hdf5`)
 **Description:**
 A suite of tools for reading and managing the Ultra-Granular HDF5 tensor outputs. Designed primarily to help downstream AI Agents ingest the self-describing schemas.
