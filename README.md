@@ -10,11 +10,15 @@ The forecasting pipeline uses one GPU to calculate the mathematical dynamics of 
 
 ## Key Features
 
-* **GPU-Accelerated Math Engine:** Leverages PyTorch (`torch.linalg.svd`) to process massive time-delay embedded Hankel matrices across multiple channels simultaneously.
-* **Modular Architecture:** Built on the Cement framework, ensuring clean separation of concerns between CLI routing, Pandas I/O, HDF5 management, and pure mathematical operations.
 * **Cluster-DMD Forecasting:** A "smart mode" workflow that automatically scans historical data for optimal reconstruction windows based on dominant period detection, generating ensemble forecasts with uncertainty metrics.
-* **Fault-Tolerant HDF5 Storage:** Writes exact DMD operators, spatial modes, and temporal dynamics to self-describing, hierarchically structured HDF5 files. Includes custom B-tree repair tools to recover data from interrupted runs.
-* **Deadlock-Safe Termination:** Implements a two-stage signal interception mechanism allowing graceful shutdowns during heavy C-extension/GPU workloads, preventing data corruption.
+* **Dominant Period Gap Detection:** A pre-processing signal analyzer that detects dominant temporal frequencies using FFT and Autocorrelation. This helps users narrow down optimal Window Sizes by identifying the natural cyclical "pulse" of the dataset.
+* **Graceful Pause & Save (`Ctrl+C`):** A single `^C` safely pauses the sweep, finishes the active GPU tensor operation, flushes all data to disk, and updates the recovery file so you can resume execution later.
+* **Deadlock-Safe Termination:** Implements a robust two-stage signal interception mechanism allowing graceful shutdowns during heavy C-extension/GPU workloads, preventing data corruption even if the Python GIL is locked by an unresponsive thread.
+* **Stateful Resumption & Crash Recovery (`--resume`):** Automatically tracks your hyperparameter configuration using a lightweight state file. If a sweep is interrupted by a power loss or system crash, the `--resume` flag seamlessly restarts the process from the exact row and stack size without losing computation time. Using --resume, all other command-line parameters (with the exception of --help) are strictly ignored to guarantee state integrity.
+* **Intermediate State, Ultra-Granular 1-to-1 HDF5 Storage:** Writes exact DMD operators, spatial modes, and temporal dynamics to isolated directories. Designed to be perfectly self-describing and natively structured for downstream AI agents.
+* **Fault-Tolerant HDF5 Storage:** Matrix decompositions are written to disk atomically at the end of each pipeline stage. This ensures a system crash will never corrupt previously generated historical data, and includes custom B-tree repair tools for legacy monolithic files.
+* **Optimized GPU-Accelerated Math Engine:** Leverages PyTorch (`torch.linalg.svd`) to process massive time-delay embedded Hankel matrices across multiple channels simultaneously. Features both a highly optimized **Sequential Mode** and a massive 3D **Batched Tensor Mode**.
+* **Modular Architecture:** Built on the Cement framework, ensuring clean separation of concerns between CLI routing, Pandas I/O, HDF5 management, and pure mathematical operations.
 
 ---
 
@@ -58,11 +62,11 @@ Install the required packages via pip:
 ---
 
 ## Usage Guide
-The application utilizes a Git-like command-line interface with nested sub-commands.
+The application utilizes a command-line interface with nested sub-commands.
 
 ---
 ### Subfunction Details
-This section details the internal mechanics of each subfunction, the valid bounds for their parameters, and the critical rules governing how those parameters interact (Inter-Parameter Constraints).
+This section details the internal mechanics of each subfunction, the valid bounds for their parameters, and the critical rules governing how those parameters interact (Constraints).
 
 #### 1. Base Profiler (Main Sweep & Forecasting)
 **Description:** The core mathematical engine of the application. It embeds 1D time-series data into high-dimensional Hankel matrices, performs SVD and DMD, and generates forecasted states. It handles both iterative hyperparameter sweeps and massive parallel 3D tensor batching.
@@ -306,13 +310,49 @@ Run standalone analysis on generated sweep data.
 python main.py analysis period sweep_results.parquet --channel S1`
 ```
 ---
-### Graceful Termination
+### Fault Tolerance & Crash Recovery
 
-The application implements custom SIGINT and SIGTERM handling to protect your data during long sweeps:
+Massive hyperparameter sweeps can take hours. To prevent data loss from system crashes or the need to free up compute resources, the application utilizes a highly robust fault-tolerance mechanism powered by signal handling and JSON state tracking.
 
-1. First`Ctrl+C`: Sets an internal application flag. The math engine will finish its current tensor operation, write the buffers safely to disk, and exit cleanly.
-2. Second`Ctrl+C`: Forces an immediate`os._exit(1)`. Use this only if a PyTorch C-extension or HDF5 thread has completely deadlocked the Python GIL and is unresponsive to the first interrupt.
+#### The Graceful Pause & Deadlock-Safe Termination (`Ctrl+C`)
+The application implements custom `SIGINT` and `SIGTERM` handling to protect your data and HDF5 integrity:
+1. **First `Ctrl+C` (Pause & Save):** Sets an internal application flag. The math engine is permitted to finish its current in-flight tensor operation. The IO Manager then flushes the temporary CSV buffers to disk, updates the execution state file, and exits cleanly. This is the recommended way to pause a long run.
+2. **Second `Ctrl+C` (Force Kill):** Forces an immediate `os._exit(1)`. Use this **only** if a PyTorch C-extension or HDF5 thread has completely deadlocked the Python GIL and is unresponsive to the first interrupt.
 
+#### The `--resume` Workflow
+When a sweep is initiated, the application generates a temporary state file alongside your data buffer. 
+
+1. **State Tracking:** After each matrix operation is successfully evaluated, the `IOManager` updates the state file with the current progress coordinate.
+2. **Crash or Pause:** If the system goes offline or you trigger a Graceful Pause, the state file retains the exact coordinate of the last successful calculation.
+3. **Resumption:** By passing the `--resume` flag (e.g., `python main.py --input data.parquet --resume`), the application bypasses standard initialization. It reads the state file, automatically restores your original command-line arguments, safely ignores previously calculated matrices, and picks up exactly where it left off.
+
+**Important Note on Parameter Overrides**: To prevent data corruption mid-sweep, the --resume flag takes absolute priority. When `--resume` is passed, all other command-line parameters provided at runtime (with the exception of `--help`) are entirely ignored by the application. You cannot change targets, formats, or window sizes while resuming.
+
+#### State File Schema (`_config.json`)
+The application relies on an `<output_prefix>_config.json` file to manage recovery. This file acts as the blueprint for your sweep and contains two primary data blocks:
+
+```json
+{
+  "original_args": {
+    "input": "data.parquet",
+    "output": "sweep_results",
+    "channels": ["S1", "S2", "S3"],
+    "min_stack": 5,
+    "max_stack": 41,
+    "batch_mode": true,
+    "hdf5": ["svd", "pred"]
+  },
+  "execution_state": {
+    "status": "interrupted",
+    "last_processed_row": 3450,
+    "last_processed_stack": 12,
+    "total_records_buffered": 86400
+  }
+}
+```
+- **original_args**: A strict dictionary of the original command-line configuration. This ensures that parameters like window sizes and target channels cannot drift if the script is restarted days later.
+
+- **execution_state**: The dynamic tracking block. last_processed_row and last_processed_stack act as the spatial coordinates for the math engine to target upon restart, preventing duplicate calculations.
 ---
 
 # Extending the Framework
