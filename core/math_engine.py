@@ -570,15 +570,14 @@ def run_sweeps_gpu_batched(
         x_last_c = X_batch[:, :, -1].to(torch.complex64).unsqueeze(-1)
         
         if dmd_lstsq:
-            # FIX: Use batched Least-Squares instead of Pseudo-Inverse to prevent CPU fallback
             b = torch.linalg.lstsq(Phi, x_last_c).solution.squeeze(-1)
         else:
             b = (torch.linalg.pinv(Phi) @ x_last_c).squeeze(-1)
-
+            
         stage_end = time.perf_counter()
+        
         perf_record["stage_4_modes_s"] = stage_end - stage_start
-        if perf_mode == 'con': 
-            print(f"  -> Stage 4 (Modes & Amplitudes)   : {perf_record['stage_4_modes_s']:.5f}s")
+        if perf_mode == 'con': print(f"  -> Stage 4 (Modes & Amplitudes)   : {perf_record['stage_4_modes_s']:.5f}s")
 
         # --- Stage 5: Batched Predictions ---
         stage_start = time.perf_counter()
@@ -693,10 +692,15 @@ def run_sweeps_gpu_batched(
         # --- End of Sweep Master Timer ---
         sweep_end_time = time.perf_counter()
         perf_record["total_sweep_s"] = sweep_end_time - sweep_start_time
+        
         if perf_mode == 'con':
             print(f"  ================================================")
             print(f"  -> Total Sweep Time               : {perf_record['total_sweep_s']:.5f}s")
-        
+        else:
+            # Clean standard progress indicator for batched mode
+            end_pred_row = global_start_row + B - 1
+            print(f"Processed Stack {s} (Rows: {global_start_row}-{end_pred_row}, Window: {w}) ({perf_record['total_sweep_s']:.2f}s)")
+            
         perf_records.append(perf_record)
 
     return all_results, perf_records
