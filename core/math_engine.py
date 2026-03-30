@@ -282,47 +282,6 @@ def run_sweeps_gpu_grouped(
     
     return all_results, all_perf_records
 
-def run_sweeps_gpu_grouped(
-    full_data_matrix, dataset_start_idx, dataset_end_idx, verification_vals, enable_train_rec,
-    channel_names, stack_range, abort_check=None, record_callback=None, hdf5_callback=None,
-    svd_gpu=False, hdf5_targets=None, dmd_lstsq=False, perf_mode=None
-):
-    """Single-window DMD wrapper for sweeping stack sizes."""
-    train_full = torch.tensor(full_data_matrix, device=DEVICE, dtype=torch.float32)
-    data_len = train_full.shape[0]
-
-    w = data_len
-    if data_len < 2: return [], []
-
-    val_train = train_full[:-1]
-    val_targets = train_full[-1, :].cpu().numpy() if enable_train_rec and data_len > 1 else None
-    real_targets = verification_vals
-
-    valid_stacks = [s for s in stack_range if s < w and (w - s + 1) >= 2]
-    if not valid_stacks: return [], []
-
-    all_results = []
-    all_perf_records = []
-
-    if enable_train_rec and val_targets is not None and val_train.shape[0] >= w:
-        local_data_val = val_train[-w:, :]
-        res, perf = process_window_group(
-            local_data_val, "train_rec", val_targets, dataset_start_idx, dataset_end_idx, w, valid_stacks,
-            channel_names, abort_check, record_callback, hdf5_callback, svd_gpu, hdf5_targets, dmd_lstsq, perf_mode
-        )
-        all_results.extend(res)
-        all_perf_records.extend(perf)
-
-    local_data_real = train_full[-w:, :]
-    res, perf = process_window_group(
-        local_data_real, "pred_rec", real_targets, dataset_start_idx, dataset_end_idx, w, valid_stacks,
-        channel_names, abort_check, record_callback, hdf5_callback, svd_gpu, hdf5_targets, dmd_lstsq, perf_mode
-    )
-    all_results.extend(res)
-    all_perf_records.extend(perf)
-    
-    return all_results, all_perf_records
-
 # ==========================================
 # BATCHED TENSOR WORKFLOW (HIGH UTILIZATION)
 # ==========================================
