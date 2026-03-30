@@ -4,7 +4,7 @@ import h5py
 import numpy as np
 
 # Core Application Constants
-SCRIPT_VERSION = "9.3.33"
+SCRIPT_VERSION = "9.4.0"
 SCHEMA_VERSION = "2.0.0"  # Restored to granular atomic schema and exact 1-to-1 routing
 
 def build_hierarchical_schema():
