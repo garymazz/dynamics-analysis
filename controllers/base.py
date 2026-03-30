@@ -34,6 +34,8 @@ class BaseController(Controller):
             (['--max-window'], {'help': 'Maximum window size', 'type': int, 'default': 151}),
             (['--svd-gpu'], {'help': 'Force SVD on GPU', 'action': 'store_true', 'default': False}),
             (['--batch-mode'], {'help': 'Enable highly-optimized 3D tensor batch processing for a fixed window size', 'action': 'store_true', 'default': False}),
+            (['--perf'], {'help': 'Enable performance monitoring. Use "--perf con" to also print to console', 'nargs': '?', 'const': 'file', 'default': None}),
+            (['--dmd-lstsq'], {'help': 'Use least-squares (lstsq) solver instead of pseudo-inverse (pinv) for DMD modes', 'action': 'store_true', 'default': False}),
         ]
 
     @ex(hide=True)
@@ -96,20 +98,18 @@ class BaseController(Controller):
             print(f"[Error] Data load failed: {e}")
             return
 
-        # 4. Atomic HDF5 Dispatch Setup
+        # 4. Atomic HDF5 Dispatch Setup & Perf Setup
         hdf5_callback = None
+        hdf5_base_dir = None
         
-        # Only initialize the HDF5 routing if the user specified targets in the list
-        if args.hdf5:
-            # Generate the schema string once
-            schema_dict = build_hierarchical_schema()
-            full_schema_json = json.dumps(schema_dict)
-            
-            # Setup the Master Directory
+        if args.hdf5 or args.perf:
             hdf5_base_dir = generate_hdf5_dir_name(hdf5_base)
             os.makedirs(hdf5_base_dir, exist_ok=True)
             
-            # Curate the routing callback for the engine
+        if args.hdf5:
+            schema_dict = build_hierarchical_schema()
+            full_schema_json = json.dumps(schema_dict)
+            
             def _hdf5_injector(data_class, d_start, d_end, w, s, payload):
                 save_stage_to_hdf5(
                     base_dir=hdf5_base_dir,
@@ -161,13 +161,12 @@ class BaseController(Controller):
 
 # 6. Execute Sweep Logic
         t0 = time.time()
+        global_perf_data = []
         
         if args.batch_mode:
             print(f"\n[INFO] Starting High-Performance Batched Tensor Workflow...")
             
             fixed_w = args.max_window
-            
-            # To predict args.start_row, we need fixed_w historical rows before it.
             slice_start_idx = args.start_row - 1 - fixed_w
             
             if slice_start_idx < 0:
@@ -176,22 +175,25 @@ class BaseController(Controller):
                 print(f"To use a window of {fixed_w}, your --start-row must be at least {fixed_w + 1}.")
                 return
                 
-            slice_end_idx = end_row # up to and including the target row index
-            
+            slice_end_idx = end_row 
             print(f"[INFO] Processing predictions for rows {args.start_row} to {end_row} (Window: {fixed_w})...")
             
             data_slice = full_data_matrix[slice_start_idx : slice_end_idx]
             
-            results = run_sweeps_gpu_batched(
+            results, perf_data = run_sweeps_gpu_batched(
                 full_data_matrix=data_slice,
                 w=fixed_w,
                 stack_list=stack_range,
                 channel_names=args.channels,
                 hdf5_callback=hdf5_callback,
                 hdf5_targets=args.hdf5,
-                global_start_row=args.start_row  # Pass the global row offset
+                global_start_row=args.start_row,
+                perf_mode=args.perf,
+                dmd_lstsq=args.dmd_lstsq
             )
             io_mgr.record_callback(results)
+            if perf_data:
+                global_perf_data.extend(perf_data)
             print(f"Batched processing complete. Generated {len(results)} records in ({time.time() - t0:.1f}s)")
             
         elif args.inc_start:
@@ -212,13 +214,48 @@ class BaseController(Controller):
                         curr_start += 1
                         continue
                 
-                run_sweeps_gpu_grouped(
+                if args.perf == 'con':
+                    print(f"\n[Row Benchmark] Target Row: {curr_start} | Window: {len(dataset)} | Stacks to Execute: {len(active_stacks)}")
+                
+                row_start_time = time.perf_counter()
+                
+                results, perf_data = run_sweeps_gpu_grouped(
                     dataset, curr_start, end_row, ver_vals, args.train_rec, args.channels, active_stacks,
                     abort_check=abort_check, record_callback=io_mgr.record_callback, hdf5_callback=hdf5_callback,
-                    svd_gpu=args.svd_gpu, hdf5_targets=args.hdf5
+                    svd_gpu=args.svd_gpu, hdf5_targets=args.hdf5, dmd_lstsq=args.dmd_lstsq, perf_mode=args.perf
                 )
-                print(f"Processed Start Row {curr_start} ({time.time() - t0:.1f}s)")
-                t0 = time.time()
+                
+                row_end_time = time.perf_counter()
+                row_duration = row_end_time - row_start_time
+                
+                if perf_data:
+                    for p in perf_data:
+                        p["target_row"] = curr_start
+                        p["direction"] = "inc_start"
+                        p["total_row_time_s"] = row_duration
+                    global_perf_data.extend(perf_data)
+                    
+                if args.perf == 'con':
+                    s1 = sum(p.get("stage_1_hankel_s", 0) for p in perf_data) if perf_data else 0
+                    s2 = sum(p.get("stage_2_svd_s", 0) for p in perf_data) if perf_data else 0
+                    s3 = sum(p.get("stage_3_operator_s", 0) for p in perf_data) if perf_data else 0
+                    s4 = sum(p.get("stage_4_modes_s", 0) for p in perf_data) if perf_data else 0
+                    s5 = sum(p.get("stage_5_predict_s", 0) for p in perf_data) if perf_data else 0
+                    s6 = sum(p.get("stage_6_hdf5_s", 0) for p in perf_data) if perf_data else 0
+                    s7 = sum(p.get("stage_7_format_s", 0) for p in perf_data) if perf_data else 0
+                    
+                    print(f"  -> Stage 1 (Hankel Construction)  : {s1:.5f}s")
+                    print(f"  -> Stage 2 (SVD Truncation)       : {s2:.5f}s")
+                    print(f"  -> Stage 3 (Operator & Eigen)     : {s3:.5f}s")
+                    print(f"  -> Stage 4 (Modes & Amplitudes)   : {s4:.5f}s")
+                    print(f"  -> Stage 5 (Predictions)          : {s5:.5f}s")
+                    print(f"  -> Stage 6 (HDF5 I/O Saving)      : {s6:.5f}s")
+                    print(f"  -> Stage 7 (Format Tabular Recs)  : {s7:.5f}s")
+                    print(f"  ================================================")
+                    print(f"  -> Total Row Execution Period     : {row_duration:.5f}s")
+                else:
+                    print(f"Processed Start Row {curr_start} ({row_duration:.2f}s)")
+                    
                 curr_start += 1
                 
         else:
@@ -242,14 +279,59 @@ class BaseController(Controller):
                         curr_end -= 1
                         continue
 
-                run_sweeps_gpu_grouped(
+                if args.perf == 'con':
+                    print(f"\n[Row Benchmark] Target Row: {curr_end} | Window: {len(dataset)} | Stacks to Execute: {len(active_stacks)}")
+
+                row_start_time = time.perf_counter()
+
+                results, perf_data = run_sweeps_gpu_grouped(
                     dataset, args.start_row, curr_end, ver_vals, args.train_rec, args.channels, active_stacks,
                     abort_check=abort_check, record_callback=io_mgr.record_callback, hdf5_callback=hdf5_callback,
-                    svd_gpu=args.svd_gpu, hdf5_targets=args.hdf5
+                    svd_gpu=args.svd_gpu, hdf5_targets=args.hdf5, dmd_lstsq=args.dmd_lstsq, perf_mode=args.perf
                 )
-                print(f"Processed End Row {curr_end} ({time.time() - t0:.1f}s)")
-                t0 = time.time()
+                
+                row_end_time = time.perf_counter()
+                row_duration = row_end_time - row_start_time
+                
+                if perf_data:
+                    for p in perf_data:
+                        p["target_row"] = curr_end
+                        p["direction"] = "dec_end"
+                        p["total_row_time_s"] = row_duration
+                    global_perf_data.extend(perf_data)
+                    
+                if args.perf == 'con':
+                    s1 = sum(p.get("stage_1_hankel_s", 0) for p in perf_data) if perf_data else 0
+                    s2 = sum(p.get("stage_2_svd_s", 0) for p in perf_data) if perf_data else 0
+                    s3 = sum(p.get("stage_3_operator_s", 0) for p in perf_data) if perf_data else 0
+                    s4 = sum(p.get("stage_4_modes_s", 0) for p in perf_data) if perf_data else 0
+                    s5 = sum(p.get("stage_5_predict_s", 0) for p in perf_data) if perf_data else 0
+                    s6 = sum(p.get("stage_6_hdf5_s", 0) for p in perf_data) if perf_data else 0
+                    s7 = sum(p.get("stage_7_format_s", 0) for p in perf_data) if perf_data else 0
+                    
+                    print(f"  -> Stage 1 (Hankel Construction)  : {s1:.5f}s")
+                    print(f"  -> Stage 2 (SVD Truncation)       : {s2:.5f}s")
+                    print(f"  -> Stage 3 (Operator & Eigen)     : {s3:.5f}s")
+                    print(f"  -> Stage 4 (Modes & Amplitudes)   : {s4:.5f}s")
+                    print(f"  -> Stage 5 (Predictions)          : {s5:.5f}s")
+                    print(f"  -> Stage 6 (HDF5 I/O Saving)      : {s6:.5f}s")
+                    print(f"  -> Stage 7 (Format Tabular Recs)  : {s7:.5f}s")
+                    print(f"  ================================================")
+                    print(f"  -> Total Row Execution Period     : {row_duration:.5f}s")
+                else:
+                    print(f"Processed End Row {curr_end} ({row_duration:.2f}s)")
+                    
                 curr_end -= 1
 
         # 7. Teardown
         io_mgr.cleanup_and_merge(keep_temp=args.keep_temp, format_type=args.format)
+        
+        # Save Performance Data to Parquet
+        if args.perf and global_perf_data:
+            import pandas as pd
+            perf_df = pd.DataFrame(global_perf_data)
+            perf_file_name = f"{os.path.basename(output_base)}_perf.parquet"
+            perf_path = os.path.join(hdf5_base_dir, perf_file_name) if hdf5_base_dir else perf_file_name
+            perf_df.to_parquet(perf_path)
+            if args.perf == 'con':
+                print(f"\n[INFO] Complete performance metrics saved to: {perf_path}")
