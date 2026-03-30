@@ -1,3 +1,4 @@
+import time
 import torch
 import numpy as np
 from core.math_engine import process_window_group, DEVICE
@@ -15,8 +16,9 @@ def run_cluster_forecast_workflow(
     detected_period: int = None,
     abort_check=None,
     svd_gpu: bool = False,
-    log_callback=None
-) -> dict:
+    log_callback=None,
+    perf_mode=None
+) -> tuple:
     """
     Executes the Smart Mode Cluster-DMD Forecasting Workflow.
     Optimizes hyperparameter selection using historical needles, then runs an ensemble forecast.
@@ -26,6 +28,7 @@ def run_cluster_forecast_workflow(
         else: print(msg)
 
     total_len = len(full_data_matrix)
+    global_perf_data = []
 
     # --- 1. Target Resolution ---
     if forecast_row is not None:
@@ -38,7 +41,7 @@ def run_cluster_forecast_workflow(
     target_idx = target_row - 1
     if target_idx > total_len:
         log("[Error] Target row is too far in the future.")
-        return None
+        return None, []
 
     target_vals = None
     if target_idx < total_len:
@@ -51,6 +54,7 @@ def run_cluster_forecast_workflow(
 
     # --- 2. Optimization Phase ---
     log(f"\nStep 1: Optimization (Scanning recent history for needles < {error_threshold}% error)...")
+    opt_start_time = time.perf_counter()
 
     opt_target_idx = target_idx - 1
     if opt_target_idx < max_window:
@@ -85,7 +89,7 @@ def run_cluster_forecast_workflow(
     for w in pilot_windows:
         if abort_check and abort_check(): 
             log("\n[Operation Aborted] Optimization halted.")
-            return None
+            return None, []
             
         if data_len < w:
             continue
@@ -96,8 +100,8 @@ def run_cluster_forecast_workflow(
 
         local_data = train_tensor[-w:, :]
         
-        # We explicitly skip HDF5 callbacks and buffer callbacks here to keep the optimization run silent/fast
-        results = process_window_group(
+        # Unpack both results and performance metrics
+        results, perf_records = process_window_group(
             local_data=local_data,
             rec_type="opt",
             target_vals=opt_truth,
@@ -107,8 +111,14 @@ def run_cluster_forecast_workflow(
             stack_list=valid_stacks,
             channel_names=channel_names,
             abort_check=abort_check,
-            svd_gpu=svd_gpu
+            svd_gpu=svd_gpu,
+            perf_mode=perf_mode
         )
+        
+        if perf_records:
+            for p in perf_records:
+                p["cluster_phase"] = "optimization"
+            global_perf_data.extend(perf_records)
 
         # Filter by threshold
         primary_ch = channel_names[0]
@@ -117,9 +127,11 @@ def run_cluster_forecast_workflow(
             if err <= error_threshold:
                 best_configs.append(res)
 
+    opt_end_time = time.perf_counter()
+
     if not best_configs:
         log(f"[Warning] No configurations found with error < {error_threshold}%.")
-        return None
+        return None, global_perf_data
 
     # Retrieve the absolute best configuration
     primary_ch = channel_names[0]
@@ -130,10 +142,11 @@ def run_cluster_forecast_workflow(
     s_opt = top_config["stack_size"]
     min_err = top_config[f"{primary_ch}_err_pct"]
 
-    log(f"[Success] Optimal Config Found: Window={w_opt}, Stack={s_opt} (Prev Error: {min_err:.4f}%)")
+    log(f"[Success] Optimal Config Found: Window={w_opt}, Stack={s_opt} (Prev Error: {min_err:.4f}%) in {opt_end_time - opt_start_time:.2f}s")
 
     # --- 3. Ensemble Forecast Phase ---
     log(f"\nStep 2: Ensemble Forecast (Width +/- {ensemble_width})....")
+    ens_start_time = time.perf_counter()
     
     ensemble_windows = range(w_opt - ensemble_width, w_opt + ensemble_width + 1)
     ensemble_stack = [s_opt]
@@ -143,13 +156,15 @@ def run_cluster_forecast_workflow(
 
     for w in ensemble_windows:
         if abort_check and abort_check(): 
-            return None
+            return None, []
             
         if w < min_window or train_tensor_final.shape[0] < w:
             continue
             
         local_data = train_tensor_final[-w:, :]
-        results = process_window_group(
+        
+        # Unpack both results and performance metrics
+        results, perf_records = process_window_group(
             local_data=local_data,
             rec_type="forecast",
             target_vals=target_vals,
@@ -159,12 +174,21 @@ def run_cluster_forecast_workflow(
             stack_list=ensemble_stack,
             channel_names=channel_names,
             abort_check=abort_check,
-            svd_gpu=svd_gpu
+            svd_gpu=svd_gpu,
+            perf_mode=perf_mode
         )
+        
+        if perf_records:
+            for p in perf_records:
+                p["cluster_phase"] = "ensemble"
+            global_perf_data.extend(perf_records)
+            
         ensemble_results.extend(results)
 
+    ens_end_time = time.perf_counter()
+
     # --- 4. Statistical Aggregation ---
-    log("\n=== Forecast Results ===")
+    log(f"\n=== Forecast Results (Generated in {ens_end_time - ens_start_time:.2f}s) ===")
     final_payload = {
         "target_row": target_row,
         "optimal_window_center": w_opt,
@@ -198,4 +222,4 @@ def run_cluster_forecast_workflow(
 
         final_payload["channels"][ch] = ch_data
 
-    return final_payload
+    return final_payload, global_perf_data
