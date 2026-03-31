@@ -18,7 +18,7 @@ def handle_signals(app, signum, frame):
 class DMDProfilerApp(App):
     class Meta:
         label = 'dmd_profiler'
-        version = '9.4.1'
+        version = '9.5.0'
         # Register ALL controllers here
         handlers = [
             BaseController,

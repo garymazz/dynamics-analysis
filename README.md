@@ -1,4 +1,4 @@
-# DMD Tool (v9.4.1)
+# DMD Tool (v9.5.0)
 
 A high-performance, GPU-accelerated framework for time-series forecasting and structural analysis using Dynamic Mode Decomposition (DMD).
 
