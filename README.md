@@ -2,7 +2,11 @@
 
 A high-performance, GPU-accelerated framework for time-series forecasting and structural analysis using Dynamic Mode Decomposition (DMD).
 
-This application provides a robust suite of tools for sweeping DMD hyperparameters, detecting dominant temporal periods, running smart ensemble forecasts, and managing large-scale matrix decompositions. You provide it with multi-channel time-series data (like sensor readings or financial metrics), and it rapidly sweeps through thousands of combinations of "Window Sizes" (how much history to look at) and "Stack Sizes" (Hankel Time-Delay Embedding depths).
+This application provides a robust suite of tools for sweeping DMD hyperparameters, detecting dominant temporal periods, running smart ensemble forecasts, and managing large-scale matrix decompositions. You provide it with multi-channel time-series data (like sensor readings or financial metrics), and it rapidly sweeps through thousands of combinations of "Window Sizes" (how much history to look at) and "Stack Sizes" (Hankle Time-Delay Embedding depths).
+
+The forecasting pipeline uses one GPU to calculate the mathematical dynamics of the system, predicts the next state, compares it to the actual data to calculate error metrics, and outputs the results in flat tabular files (Parquet/Excel) alongside highly granular, AI-agent-ready HDF5 mathematical tensors.
+
+---
 
 The forecasting pipeline uses one GPU to calculate the mathematical dynamics of the system, predicts the next state, compares it to the actual data to calculate error metrics, and outputs the results in flat tabular files (Parquet/Excel) alongside highly granular, AI-agent-ready HDF5 mathematical tensors.
 
@@ -24,31 +28,28 @@ The forecasting pipeline uses one GPU to calculate the mathematical dynamics of 
 
 ## System Architecture
 
-Built on the **Cement CLI Framework** and **PyTorch**, the codebase has been decoupled from a monolithic script into a scalable MVC-like structure:
-
-```Plaintext
-dmd\_profiler/
-├── .gitignore              \# Git ignore rules for cached files and temp data
-├── README.md               \# Project documentation, architecture, and usage guide
-├── main.py                 \# Application bootstrap and global signal handlers
-├── core/                   \# Framework-agnostic business logic
-│   ├── cluster\_engine.py   \# K-Means clustering logic for dynamic behaviors
-│   ├── hdf5\_manager.py     \# 1-to-1 Ultra-Granular HDF5 schema generation and injection
-│   ├── io\_manager.py       \# Pandas data loading, buffering, state-resume, and exporting
-│   ├── math\_engine.py      \# PyTorch SVD/DMD tensor math (Sequential & 3D Batched Workflows)
-│   ├── period\_analysis.py  \# Algorithms for dominant period gap detection
-│   └── reporter.py         \# Reporting and logging utilities
-└── controllers/            \# Cement CLI Routing and Argument Parsing
-├── analysis\_tools.py   \# Sub-commands for standalone period analysis
-├── base.py             \# Default execution (Standard Sweeps & Batched Tensor Workflow)
-├── cluster\_tools.py    \# Sub-commands for behavior clustering
-└── hdf5\_tools.py       \# Sub-commands for HDF5 repair and inspection
+Built on the **Cement CLI Framework** and **PyTorch**, The codebase has been decoupled from a monolithic script into a scalable MVC-like structure using Cement:
 ```
-
+dmd_profiler/ 
+├── .gitignore              # Git ignore rules for cached files and temp data
+├── README.md               # Project documentation, architecture, and usage guide
+├── main.py                 # Application bootstrap and global signal handlers
+├── core/                   # Framework-agnostic business logic
+│   ├── cluster_engine.py   # K-Means clustering logic for dynamic behaviors
+│   ├── hdf5_manager.py     # 1-to-1 Ultra-Granular HDF5 schema generation and injection
+│   ├── io_manager.py       # Pandas data loading, buffering, state-resume, and exporting
+│   ├── math_engine.py      # PyTorch SVD/DMD tensor math (Sequential & 3D Batched Workflows)
+│   ├── period_analysis.py  # Algorithms for dominant period gap detection
+│   └── reporter.py         # Reporting and logging utilities
+└── controllers/            # Cement CLI Routing and Argument Parsing
+    ├── analysis_tools.py   # Sub-commands for standalone period analysis
+    ├── base.py             # Default execution (Standard Sweeps & Batched Tensor Workflow)
+    ├── cluster_tools.py    # Sub-commands for behavior clustering
+    └── hdf5_tools.py       # Sub-commands for HDF5 repair and inspection
+```
 ---
 
 ## Installation
-
 **Prerequisites**
 
 * Python 3.8+
@@ -67,6 +68,7 @@ pip install cement torch numpy pandas h5py openpyxl pyarrow
 ---
 
 ## Usage Guide
+The application utilizes a command-line interface with nested sub-commands.
 
 The application utilizes a command-line interface with nested sub-commands.
 
@@ -291,7 +293,7 @@ python main.py analysis period sweep\_results.parquet \--channel S1
 
 ### Requirements
 
-The application expects continuous time-series data without headers.
+If you prefer to keep the raw CSV data for alternative downstream processing, you can pass the `--keep-temp` flag at runtime. This instructs the IO Manager to leave the CSV file intact on your hard drive alongside the compiled Parquet/Excel files.
 
 * **Excel (.xlsx):** Read with no headers. Columns are mapped sequentially to requested channels.
 * **Parquet (.parquet):** Fast, compressed columnar storage. Preferred for large datasets.
@@ -448,7 +450,7 @@ When a sweep is initiated, the application generates a temporary state file alon
 
 ---
 
-## Extending the Framework
+# Extending the Framework
 
 To add new workflows or algorithms, create a new Controller class in the controllers/ directory and register it in the handlers list within main.py. Keep heavy mathematical operations isolated in the core/ directory to maintain framework independence.
 
