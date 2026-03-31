@@ -10,6 +10,7 @@ The forecasting pipeline uses one GPU to calculate the mathematical dynamics of 
 
 * **Cluster-DMD Forecasting:** A "smart mode" workflow that automatically scans historical data for optimal reconstruction windows based on dominant period detection, generating ensemble forecasts with uncertainty metrics.
 * **Dominant Period Gap Detection:** A pre-processing signal analyzer that detects dominant temporal frequencies using FFT and Autocorrelation. This helps users narrow down optimal Window Sizes by identifying the natural cyclical "pulse" of the dataset.
+* **Training Reconstruction Error Tracking:** Enables the calculation of reconstruction accuracy on the historical training dataset itself, providing deeper insights into how well the DMD operator models the known system dynamics.
 * **Micro-Stage Performance Profiling:** Deep hardware benchmarking tools that track matrix execution times (Hankel construction, SVD, Operator reduction, and Predictions) down to the millisecond, aggregating results per-row or per-batch for cross-system analysis.
 * **Optimized GPU-Accelerated Math Engine with Interchangeable Solvers:** Leverages PyTorch (torch.linalg.svd) to process massive time-delay embedded Hankel matrices. Features both a Sequential Mode and a massive 3D Batched Tensor Mode. Users can also dynamically swap core linear algebra solvers (e.g., standard Pseudo-Inverse vs. direct Least-Squares) to maximize GPU stability.
 * **Graceful Pause & Save (Ctrl+C):** A single ^C safely pauses the sweep, finishes the active GPU tensor operation, flushes all data to disk, and updates the recovery file so you can resume execution later.
@@ -75,12 +76,15 @@ The application utilizes a command-line interface with nested sub-commands.
 
 **Key Arguments:**
 
-* \-i, \--input: Source data file (.xlsx or .parquet).
-* \--channels: Channels to analyze (Default: S1 S2 S3 S4 S5).
-* \--hdf5 all: Save full Eigendecomposition and DMD Operators to the output HDF5 file.
-* \--svd-gpu: Force SVD calculations to run on the GPU if available.
-* \--perf \[con\]: Enable performance profiling timers. Adding con streams metrics to the terminal.
-* \--dmd-lstsq: Use a direct Least-Squares solver instead of the default Pseudo-Inverse for DMD modes.
+* `-i, --input`: Source data file (.xlsx or .parquet).
+* `--channels`: Channels to analyze (Default: S1 S2 S3 S4 S5).
+* `--hdf5 all`: Save full Eigendecomposition and DMD Operators to the output HDF5 file.
+* `--svd-gpu`: Force SVD calculations to run on the GPU if available.
+* `--perf \[con\]`: Enable performance profiling timers. Adding con streams metrics to the terminal.
+* `--dmd-lstsq`: Use a direct Least-Squares solver instead of the default Pseudo-Inverse for DMD modes.
+* `--hdf5-dir`: Specify a custom directory path for all HDF5 output. If provided alongside `--hdf5`, the isolated stage directories will be generated here instead of the current working directory.
+* `--train-rec`: Calculate the reconstruction error of the training data itself, in addition to the predicted future state.
+* `--schema`: Print the complete output JSON schema definition to the terminal and exit.
 
 **Valid Parameter Ranges:**
 
@@ -160,24 +164,28 @@ The Cluster-DMD workflow is the "Smart Mode" predictive engine. Instead of requi
 **Workflow:**
 
 1. **Target Resolution:** Determines if you are forecasting a known historical row (for backtesting) or a true future state (Row N+1).
-2. **Search Space Construction**: If provided with a detected period (via `--sweep-input`), the engine optimizes the search space to only scan window sizes that are multiples of that resonant period. Otherwise, it runs a full spectrum scan.
-3. **Optimization Phase**: The engine steps back one row and rapidly computes DMD models across the search space. It identifies the absolute best Window and Stack combination that yields an error below the `--error-threshold`.
-4. Ensemble Forecast Phase: Using the optimal configuration, the engine computes multiple predictions for the target row using a cluster of surrounding window sizes (w_opt +- ensemble_width).
-5. **Statistical Aggregation**: The ensemble of predictions is aggregated to calculate the Median Prediction and Standard Deviation (uncertainty) for each channel.
+2. **Search Space Construction:** If provided with a detected period (via `--sweep-input`), the engine optimizes the search space to only scan window sizes that are multiples of that resonant period. Otherwise, it runs a full spectrum scan.
+3. **Optimization Phase:** Identifies the absolute best Window and Stack combination that yields an error below the `--error-threshold`.
+   * *Sequential Mode (Default):* The engine steps back one row and iterates through configurations.
+   * *Batched Tensor Mode (`--batch-mode`):* The engine extracts a validation block of the last 20 historical rows and evaluates the entire block simultaneously on the GPU, calculating the mean error across the batch for lightning-fast optimization.
+4. **Ensemble Forecast Phase:** Always runs sequentially. Using the optimal configuration, the engine computes multiple predictions for the target row using a cluster of surrounding window sizes (`w_opt +/- ensemble_width`).
+5. **Statistical Aggregation:** The ensemble of predictions is aggregated to calculate the Median Prediction and Standard Deviation (uncertainty) for each channel.
 
 **Command Line Options:**
 
-The cluster sub-command utilizes the following arguments:
+The `cluster` sub-command utilizes the following arguments:
 
 * `-i, --input` *(Required)*: Path to the source data file.
 * `-o, --output` *(Optional)*: Base name prefix for output files.
 * `--channels` *(Optional)*: List of channels to analyze (Default: S1 S2 S3 S4 S5).
 * `--error-threshold` *(Optional)*: The target error percentage required to accept an optimal historical window (Default: 1.0).
 * `--forecast-row` *(Optional)*: Specific row index to forecast. If left blank, defaults to N+1 (the future).
-* `--ensemble-width` *(Optional)*: The \+/- variance in window size to use when clustering forecasts around the optimum (Default: 5).
+* `--ensemble-width` *(Optional)*: The +/- variance in window size to use when clustering forecasts around the optimum (Default: 5).
 * `--sweep-input` *(Optional)*: Path to a previous sweep file. If provided, the engine will run Dominant Period Detection and optimize its search space based on the resulting period.
 * `--min-stack` / `--max-stack`: Bounding constraints for Stack sizes (Defaults: 5 to 41).
 * `--min-window` / `--max-window`: Bounding constraints for Window sizes (Defaults: 20 to 151).
+* `--batch-mode` *(Optional)*: Enables the highly-optimized Batched Tensor Workflow specifically for the Optimization Phase.
+* `--perf [con]` *(Optional)*: Enables deep performance monitoring for the cluster workflow. Adding `con` streams metrics to the terminal.
 * `--svd-gpu`: Force SVD calculations to run on the GPU.
 
 **Input File Types & Data Schema:**
@@ -292,13 +300,13 @@ The application expects continuous time-series data without headers.
 
 The core mathematical engine treats your input file as a dense, 2D numerical matrix where **Rows \= Time** and **Columns \= Variables**.
 
-**1\. Rows (Temporal Snapshots)**
+**1. Rows (Temporal Snapshots)**
 
 Every row in your dataset must represent a single, sequential snapshot in time. There should be no missing rows or gaps in the time-series.
 
 * The `--start-row` and `--end-row` CLI parameters act as a vertical data slicer. They dictate the exact contiguous block of time-steps the engine will extract into memory to build the Hankel matrices.
 
-**2\. Columns (State Variables / Channels)**
+**2. Columns (State Variables / Channels)**
 
 Every column represents a distinct feature, sensor, or mathematical state variable. Because the application explicitly expects **headerless** data files, the columns are mapped positionally from left to right.
 
@@ -317,25 +325,33 @@ The primary forecasting results and error metrics are exported to flat, tabular 
 
 Simultaneously, the pure mathematical tensors (SVD, Eigenvalues, DMD Modes) functioning as intermediary elements of the calculations are exported to isolated HDF5 directories.
 
-### 1\. Temporary CSV Buffering & The \--keep-temp Flag
+### 1. Temporary CSV Buffering & The `--keep-temp` Flag
 
-To prevent memory exhaustion during massive parameter sweeps, the application does not hold all results in RAM. Instead, the IO Manager continuously flushes forecast metrics to a temporary CSV file named \<output\_prefix\>\_temp.csv. This file also acts as the vital recovery ledger if you need to use the \--resume function.
+To prevent memory exhaustion during massive parameter sweeps, the application does not hold all results in RAM. Instead, the IO Manager continuously flushes forecast metrics to a temporary CSV file named \<output\_prefix\>\_temp.csv. This file also acts as the vital recovery ledger if you need to use the `--resume` function.
 
-Upon successful completion of the sweep, the application automatically compiles this temporary CSV into your final requested format and deletes it to save disk space. If you prefer to keep the raw CSV data for downstream processing, pass the \--keep-temp flag at runtime.
+Upon successful completion of the sweep, the application automatically compiles this temporary CSV into your final requested format and deletes it to save disk space. If you prefer to keep the raw CSV data for downstream processing, pass the `--keep-temp` flag at runtime.
 
-### 2\. The Tabular Record Schema
+#### 2. The Tabular Record Schema
 
 Each row in the output file represents a single prediction generated by a specific Window/Stack combination:
 
 * `data_set_start` / `data_set_end`: The specific historical slice of rows used to build the Hankel matrix for this prediction.
+* `data_window_size`: The total number of rows in the historical slice.
 * `window_size`: The temporal lookback window ($w$) used.
-* `stack_size:` The Time-Delay Embedding depth ($s$) used.
+* `stack_size`: The Time-Delay Embedding depth ($s$) used.
+* `rank_ratio`: The truncation threshold used during SVD (Default: 0.99).
+
+**Channel Metrics:** *(Generated for every mapped channel, e.g., `S1`)*
 * `{channel}_val_target`: The actual ground-truth value from the dataset at the target row.
 * `{channel}_pred_value`: The raw, continuous float prediction calculated by the DMD operator.
-* `{channel}_pred_err`: The absolute error (`{target}` - `{prediction}`).
+* `{channel}_pred_err`: The absolute error ($| \text{target} - \text{prediction} |$).
 * `{channel}_err_pct`: The percentage error relative to the target value.
 
-### 3\. Performance Output (\_perf.parquet)
+**Integer-Rounded Metrics:**
+To support categorical or count-based modeling, the application also generates integer-rounded variants for every continuous metric: 
+* `{channel}_val_target_int`, `{channel}_pred_value_int`, `{channel}_pred_err_int`, `{channel}_err_pct_int`.
+
+### 3. Performance Output (_perf.parquet)
 
 If the `--perf` flag is enabled during execution, the application will generate an additional `<output_prefix>_perf.parquet` file alongside your main results. This file contains a highly granular diagnostic log, recording the exact sub-millisecond execution times for every matrix operation mapped to its specific stack size and row iteration.
 
