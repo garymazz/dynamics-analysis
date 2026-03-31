@@ -378,6 +378,11 @@ Depending on whether you are running the Sequential or Batched workflow, the per
   * **total_stack_s:** Total time to compute the entire DMD pipeline for a single stack size.
   * **total_row_time_s**: (Sequential Mode) Total time to compute all active stack sizes for a single target row.
   * **total_sweep_s**: (Batched Mode) Total time to compute a specific stack size across the entire massive 3D tensor batch.
+* **Cluster Workflow Timings (`_cluster_perf.parquet` only):**
+  If `--perf` is executed using the `cluster` sub-command, the output includes three additional columns to track the Smart Mode context:
+  * `cluster_phase`: Identifies which macro-phase generated the metrics (`optimization`, `optimization_batched`, or `ensemble`).
+  * `total_cluster_workflow_s`: The total execution time (in seconds) for the entire Smart Mode clustering process.
+  * `cluster_execution_mode`: Indicates if the engine was running in `sequential` or `batched` mode.  
 
 ### 4\. Ultra-Granular HDF5 Output (Schema v2.0.0)
 
