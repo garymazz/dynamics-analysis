@@ -1,11 +1,12 @@
 import os
 import json
+import time
 import pandas as pd
 from cement import Controller, ex
 
 # Import our decoupled core modules
 from core.io_manager import IOManager
-from core.cluster_engine import run_cluster_forecast_workflow
+from core.cluster_engine import run_cluster_forecast_workflow, run_cluster_forecast_workflow_batched
 from core.period_analysis import analyze_period_report
 
 class ClusterController(Controller):
@@ -33,8 +34,10 @@ class ClusterController(Controller):
             (['--min-window'], {'help': 'Minimum window size', 'type': int, 'default': 20}),
             (['--max-window'], {'help': 'Maximum window size', 'type': int, 'default': 151}),
             
-            # Hardware
+            # Hardware, Profiling & Execution Modes
+            (['--batch-mode'], {'help': 'Enable High-Performance Batched Tensor Workflow for optimization', 'action': 'store_true', 'default': False}),
             (['--svd-gpu'], {'help': 'Force SVD on GPU', 'action': 'store_true', 'default': False}),
+            (['--perf'], {'help': 'Enable performance monitoring. Use "--perf con" to also print to console', 'nargs': '?', 'const': 'file', 'default': None}),
         ]
 
     @ex(hide=True)
@@ -85,21 +88,47 @@ class ClusterController(Controller):
             print(msg)
 
         # 5. Execute the Core Cluster Engine
-        final_payload = run_cluster_forecast_workflow(
-            full_data_matrix=full_data_matrix,
-            channel_names=args.channels,
-            error_threshold=args.error_threshold,
-            min_window=args.min_window,
-            max_window=args.max_window,
-            min_stack=args.min_stack,
-            max_stack=args.max_stack,
-            ensemble_width=args.ensemble_width,
-            forecast_row=args.forecast_row,
-            detected_period=detected_period,
-            abort_check=abort_check,
-            svd_gpu=args.svd_gpu,
-            log_callback=_console_logger
-        )
+        t0 = time.time()
+        
+        if args.batch_mode:
+            print("\n[INFO] Routing to Batched Tensor Cluster Engine...")
+            final_payload, perf_data = run_cluster_forecast_workflow_batched(
+                full_data_matrix=full_data_matrix,
+                channel_names=args.channels,
+                error_threshold=args.error_threshold,
+                min_window=args.min_window,
+                max_window=args.max_window,
+                min_stack=args.min_stack,
+                max_stack=args.max_stack,
+                ensemble_width=args.ensemble_width,
+                forecast_row=args.forecast_row,
+                detected_period=detected_period,
+                abort_check=abort_check,
+                svd_gpu=args.svd_gpu,
+                log_callback=_console_logger,
+                perf_mode=args.perf,
+                validation_batch_size=20 # Expose this block size if you want later
+            )
+        else:
+            print("\n[INFO] Routing to Sequential Cluster Engine...")
+            final_payload, perf_data = run_cluster_forecast_workflow(
+                full_data_matrix=full_data_matrix,
+                channel_names=args.channels,
+                error_threshold=args.error_threshold,
+                min_window=args.min_window,
+                max_window=args.max_window,
+                min_stack=args.min_stack,
+                max_stack=args.max_stack,
+                ensemble_width=args.ensemble_width,
+                forecast_row=args.forecast_row,
+                detected_period=detected_period,
+                abort_check=abort_check,
+                svd_gpu=args.svd_gpu,
+                log_callback=_console_logger,
+                perf_mode=args.perf
+            )
+            
+        total_runtime = time.time() - t0
 
         # 6. Save the results
         if final_payload:
@@ -112,3 +141,16 @@ class ClusterController(Controller):
                 print(f"[Error] Failed to write forecast JSON: {e}")
         else:
             print("\n[Warning] Cluster workflow did not return a valid forecast.")
+
+        # 7. Save Performance Data to Parquet
+        if args.perf and perf_data:
+            for p in perf_data:
+                p["total_cluster_workflow_s"] = total_runtime
+                p["cluster_execution_mode"] = "batched" if args.batch_mode else "sequential"
+                
+            perf_df = pd.DataFrame(perf_data)
+            perf_file_name = f"{output_base}_cluster_perf.parquet"
+            perf_df.to_parquet(perf_file_name)
+            
+            if args.perf == 'con':
+                print(f"[INFO] Complete Cluster performance metrics saved to: {perf_file_name}")
