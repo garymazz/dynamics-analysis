@@ -1,22 +1,66 @@
 import numpy as np
 
+# ==========================================
+# INDEPENDENT QUALITATIVE & QUANTITATIVE ANALYSIS
+# ==========================================
+
+def detect_needles_heuristic(windows: np.ndarray, errors: np.ndarray, max_error_threshold: float = 5.0) -> list:
+    """
+    Qualitative analysis: Identifies local minima (needles) based on curve shape.
+    A point is a needle if its error is strictly lower than its immediate neighbors 
+    and falls below the specified maximum error threshold.
+    """
+    needle_windows = []
+    for i in range(1, len(errors) - 1):
+        # Shape check: point must be lower than its neighbors
+        if errors[i] < errors[i - 1] and errors[i] < errors[i + 1]:
+            # Threshold check: absolute error must be reasonably low
+            if errors[i] < max_error_threshold:
+                needle_windows.append(windows[i])
+    return needle_windows
+
+def calculate_gap_statistics(needle_windows: list) -> tuple:
+    """
+    Quantitative analysis: Calculates period, median, and confidence metrics.
+    Filters out extreme outliers to find the true resonant frequency.
+    """
+    if len(needle_windows) < 2:
+        return None, 0.0, []
+        
+    gaps = np.diff(needle_windows)
+    period_est = float(np.median(gaps))
+    
+    # Filter valid gaps (removing severe outliers that deviate by more than 2.0)
+    valid_gaps = [g for g in gaps if abs(g - period_est) < 2.0]
+    
+    refined_period = float(np.mean(valid_gaps)) if valid_gaps else period_est
+    confidence = (len(valid_gaps) / len(gaps)) * 100.0 if gaps.size > 0 else 0.0
+    
+    return refined_period, confidence, gaps
+
+
+# ==========================================
+# ORCHESTRATOR & REPORTING
+# ==========================================
+
 def analyze_period_report(sweep_df, channel_name="S1"):
-    """Standalone logic for detecting dominant periods in sweep data."""
+    """
+    Standalone logic for detecting dominant periods in sweep data.
+    Decoupled to use independent qualitative and quantitative analysis functions.
+    """
     col_err = f"{channel_name}_err_pct"
     if col_err not in sweep_df.columns:
         return {"error": f"Channel {channel_name} not found"}
 
+    # Aggregate minimum errors per window
     df_win = sweep_df.groupby("window_size")[col_err].min().reset_index()
     df_win = df_win.sort_values("window_size")
 
     windows = df_win["window_size"].values
     errors = df_win[col_err].values
 
-    needle_windows = []
-    for i in range(1, len(errors) - 1):
-        if errors[i] < errors[i - 1] and errors[i] < errors[i + 1]:
-            if errors[i] < 5.0:
-                needle_windows.append(windows[i])
+    # 1. Qualitative Analysis
+    needle_windows = detect_needles_heuristic(windows, errors, max_error_threshold=5.0)
 
     if len(needle_windows) < 2:
         return {
@@ -25,12 +69,8 @@ def analyze_period_report(sweep_df, channel_name="S1"):
             "needles_found": list(needle_windows),
         }
 
-    gaps = np.diff(needle_windows)
-    period_est = float(np.median(gaps))
-
-    valid_gaps = [g for g in gaps if abs(g - period_est) < 2.0]
-    refined_period = float(np.mean(valid_gaps)) if valid_gaps else period_est
-    confidence = (len(valid_gaps) / len(gaps)) * 100.0 if gaps.size > 0 else 0.0
+    # 2. Quantitative Analysis
+    refined_period, confidence, gaps = calculate_gap_statistics(needle_windows)
 
     return {
         "status": "SUCCESS",
@@ -43,7 +83,9 @@ def analyze_period_report(sweep_df, channel_name="S1"):
     }
 
 def print_period_report(report):
-    """Outputs the period analysis report to the console."""
+    """
+    Outputs the period analysis report to the console.
+    """
     print("\n=== Dominant Period Analysis Report ===")
     if report.get("status") == "FAILED":
         print("Status: FAILED")

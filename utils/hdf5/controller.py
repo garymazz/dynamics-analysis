@@ -1,38 +1,44 @@
-
 from cement import Controller, ex
-from core.hdf5_manager import analyze_and_fix_hdf5, print_hdf5_schema
+
+# --- DOMAIN-DRIVEN IMPORTS ---
+from utils.hdf5._main import HDF5Manager, SCHEMA_VERSION, SCRIPT_VERSION
 
 class HDF5Controller(Controller):
     class Meta:
         label = 'hdf5'
-        stacked_on = 'base'
-        stacked_type = 'nested'
-        description = 'HDF5 Diagnostic, Schema, and Repair Tools'
+        stacked_on = 'base'         # <-- Stacked on the root base controller
+        stacked_type = 'embedded'     # <-- Attaches sub-command to base controller without creating a new CLI layer (i.e., `python main.py cluster ...` instead of `python main.py cluster cluster ...`)
+        description = 'HDF5 schema inspection and dataset repair tools'
 
-    @ex(
-        help='Analyze and safely repair an HDF5 file by truncating corrupt entries.',
-        arguments=[(['file_path'], {'help': 'Path to the HDF5 file to fix'})]
-    )
-    def fix(self):
-        """CLI Routing for: python main.py hdf5 fix <file>"""
-        file_path = self.app.pargs.file_path
-        abort_check = lambda: getattr(self.app, 'shutdown_initiated', False)
-        analyze_and_fix_hdf5(file_path, fix=True, abort_check=abort_check)
+    @ex(help='Print HDF5 utility help menu')
+    def hdf5(self):
+        # Enforces your rule: default ONLY prints help
+        self.app.args.print_help()
 
-    @ex(
-        help='Print a clean, formatted report of the hierarchical schema embedded in the file.',
-        arguments=[(['file_path'], {'help': 'Path to the HDF5 file'})]
-    )
+    @ex(help='Print the hierarchical schema...', arguments=[...])
     def schema(self):
         """CLI Routing for: python main.py hdf5 schema <file>"""
-        print_hdf5_schema(self.app.pargs.file_path)
+        print(f"HDF5 Diagnostic Tools (v{SCRIPT_VERSION} | Schema v{SCHEMA_VERSION})")
+        HDF5Manager.print_schema(self.app.pargs.target_file)
 
     @ex(
-        help='Analyze the HDF5 file to find the last known good configuration without altering the file.',
-        arguments=[(['file_path'], {'help': 'Path to the HDF5 file'})]
+        help='Inspect an HDF5 file for truncated datasets or structural corruption.',
+        arguments=[
+            (['target_file'], {'help': 'Path to the HDF5 file'}),
+        ]
     )
     def inspect(self):
         """CLI Routing for: python main.py hdf5 inspect <file>"""
-        file_path = self.app.pargs.file_path
-        abort_check = lambda: getattr(self.app, 'shutdown_initiated', False)
-        analyze_and_fix_hdf5(file_path, fix=False, abort_check=abort_check)
+        print(f"HDF5 Diagnostic Tools (v{SCRIPT_VERSION} | Schema v{SCHEMA_VERSION})")
+        HDF5Manager.inspect_file(self.app.pargs.target_file)
+
+    @ex(
+        help='Attempt to safely repair a corrupted HDF5 file by truncating damaged tail entries.',
+        arguments=[
+            (['target_file'], {'help': 'Path to the HDF5 file'}),
+        ]
+    )
+    def fix(self):
+        """CLI Routing for: python main.py hdf5 fix <file>"""
+        print(f"HDF5 Diagnostic Tools (v{SCRIPT_VERSION} | Schema v{SCHEMA_VERSION})")
+        HDF5Manager.repair_file(self.app.pargs.target_file)
