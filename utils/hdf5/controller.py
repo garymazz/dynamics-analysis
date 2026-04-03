@@ -15,7 +15,12 @@ class HDF5Controller(Controller):
         # Enforces your rule: default ONLY prints help
         self.app.args.print_help()
 
-    @ex(help='Print the hierarchical schema...', arguments=[...])
+    @ex(
+        help='Print the hierarchical schema of an HDF5 file.',
+        arguments=[
+            (['target_file'], {'help': 'Path to the HDF5 file'}),
+        ]
+    )
     def schema(self):
         """CLI Routing for: python main.py hdf5 schema <file>"""
         print(f"HDF5 Diagnostic Tools (v{SCRIPT_VERSION} | Schema v{SCHEMA_VERSION})")

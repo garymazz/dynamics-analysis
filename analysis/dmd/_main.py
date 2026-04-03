@@ -1,34 +1,10 @@
 import time
 import torch
 import numpy as np
+from meta_analysis.evaluator import calculate_prediction_errors
 
 # Device Configuration evaluated at module load
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-
-# ==========================================
-# INDEPENDENT QUANTITATIVE ANALYSIS
-# ==========================================
-
-def calculate_prediction_errors(pred_val: float, target_val: float) -> dict:
-    """Quantitative analysis: Computes continuous and integer-based error metrics."""
-    if target_val is None:
-        return {}
-        
-    p_int = int(round(pred_val))
-    t_int = int(target_val)
-    err = abs(pred_val - target_val)
-    pct = (err / max(1.0, abs(target_val))) * 100.0
-    err_int = abs(p_int - t_int)
-    pct_int = (err_int / max(1.0, abs(t_int))) * 100.0
-    
-    return {
-        "val_target": float(target_val),
-        "pred_err": err,
-        "err_pct": pct,
-        "val_target_int": t_int,
-        "pred_err_int": err_int,
-        "err_pct_int": pct_int
-    }
 
 # ==========================================
 # STAGES 1-5: PURE MATHEMATICAL OPERATIONS

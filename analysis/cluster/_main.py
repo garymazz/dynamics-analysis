@@ -2,8 +2,21 @@ import time
 import torch
 import numpy as np
 from analysis.dmd._main import process_window_group, run_sweeps_gpu_batched, DEVICE
+from meta_analysis.evaluator import calculate_prediction_errors # For base metrics
+from meta_analysis.ensemble import calculate_ensemble_statistics # For median stats
 
-# ==========================================
+def filter_optimal_configurations(results: list, primary_ch: str, error_threshold: float) -> list:
+    """
+    Independent Quantitative Filtering: 
+    Gatekeeper function to ensure model fidelity before ensembling.
+    """
+    valid_configs = []
+    for res in results:
+        err = res.get(f"{primary_ch}_err_pct")
+        if err is not None and err <= error_threshold:
+            valid_configs.append(res)
+    return valid_configs
+
 # INDEPENDENT QUALITATIVE & QUANTITATIVE ANALYSIS
 # ==========================================
 

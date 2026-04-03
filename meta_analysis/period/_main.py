@@ -1,101 +1,126 @@
+"""
+Independent Meta-Analysis: Period & Structural Pattern Discovery
+Housed in: meta_analysis/period/_main.py
+
+PURPOSE:
+To identify the 'Natural Pulse' of a system by analyzing how prediction 
+error 'needles' (local minima) cluster, distribute, and correlate across 
+three distinct dimensions of the search space:
+1. Data Row Range (Temporal Stability)
+2. Stack Size (Model Order/Rank Complexity)
+3. Window Size (Observation Scale/Frequency)
+
+ALGORITHM BENEFITS:
+- Noise Rejection: True physical resonances persist across different stack 
+  sizes, while stochastic noise typically creates isolated error drops.
+- Structural Validation: By correlating peak patterns across sweeps, the 
+  system identifies the most robust "Natural Pulse" for forecasting.
+- Range Discovery: Detects transient stability zones within single windows 
+  that are otherwise obscured by global error averages.
+
+DRAWBACKS:
+- Computational Load: The Triple-Sweep (O(N*M*K)) is resource-intensive 
+  and requires GPU acceleration for large datasets.
+- Sensitivity: Heuristics for "needles" require careful tuning of the 
+  % error thresholds to avoid missing narrow resonance bands.
+
+WORKFLOW DESCRIPTION:
+1. Feature Extraction: Identify 'needles' (local minima) in error surfaces.
+2. Distribution Analysis: Calculate gap distances between needles to 
+   find periodic consistency.
+3. Structural Correlation: Compare needle "fingerprints" across different 
+   stack and window ranges to ensure pattern persistence.
+4. Judgment: Output a confidence-weighted period report.
+
+IMPLEMENTATION NOTE: 
+The intent behind this multi-layered schema is to provide traceability. 
+If a forecast (Ensemble) is incorrect, the user can step back to this 
+Period analysis to see if the natural pulse was weak, or to the Primary 
+schema to check raw prediction errors for specific stack sizes.
+"""
+
 import numpy as np
 
-# ==========================================
-# INDEPENDENT QUALITATIVE & QUANTITATIVE ANALYSIS
-# ==========================================
-
-def detect_needles_heuristic(windows: np.ndarray, errors: np.ndarray, max_error_threshold: float = 5.0) -> list:
+def detect_intra_window_needle_ranges(window_data: np.ndarray, threshold: float = 0.01) -> list:
     """
-    Qualitative analysis: Identifies local minima (needles) based on curve shape.
-    A point is a needle if its error is strictly lower than its immediate neighbors 
-    and falls below the specified maximum error threshold.
+    STEP INTENT: Find ranges of needle patterns within a single window.
+    Detects sub-segments of low volatility where DMD fit is highest.
     """
-    needle_windows = []
-    for i in range(1, len(errors) - 1):
-        # Shape check: point must be lower than its neighbors
-        if errors[i] < errors[i - 1] and errors[i] < errors[i + 1]:
-            # Threshold check: absolute error must be reasonably low
-            if errors[i] < max_error_threshold:
-                needle_windows.append(windows[i])
-    return needle_windows
-
-def calculate_gap_statistics(needle_windows: list) -> tuple:
-    """
-    Quantitative analysis: Calculates period, median, and confidence metrics.
-    Filters out extreme outliers to find the true resonant frequency.
-    """
-    if len(needle_windows) < 2:
-        return None, 0.0, []
-        
-    gaps = np.diff(needle_windows)
-    period_est = float(np.median(gaps))
+    # Use L2 norm for multi-channel data to get a singular magnitude signal
+    signal = np.linalg.norm(window_data, axis=0) if window_data.ndim > 1 else window_data
     
-    # Filter valid gaps (removing severe outliers that deviate by more than 2.0)
-    valid_gaps = [g for g in gaps if abs(g - period_est) < 2.0]
+    # Calculate rolling variance to find "stability needles"
+    local_var = np.array([np.var(signal[i:i+5]) for i in range(len(signal)-5)])
     
-    refined_period = float(np.mean(valid_gaps)) if valid_gaps else period_est
-    confidence = (len(valid_gaps) / len(gaps)) * 100.0 if gaps.size > 0 else 0.0
+    ranges = []
+    in_range = False
+    start_idx = 0
     
-    return refined_period, confidence, gaps
+    for i, var in enumerate(local_var):
+        if var < threshold:
+            if not in_range:
+                start_idx = i
+                in_range = True
+        else:
+            if in_range:
+                ranges.append((start_idx, i))
+                in_range = False
+    return ranges
 
-
-# ==========================================
-# ORCHESTRATOR & REPORTING
-# ==========================================
-
-def analyze_period_report(sweep_df, channel_name="S1"):
+def calculate_gap_distribution(needle_indices: list) -> dict:
     """
-    Standalone logic for detecting dominant periods in sweep data.
-    Decoupled to use independent qualitative and quantitative analysis functions.
+    STEP INTENT: Quantify the 'Natural Pulse' spacing between accuracy needles.
+    Analyzes gap distances over % error, stack size, and data row sweeps.
     """
-    col_err = f"{channel_name}_err_pct"
-    if col_err not in sweep_df.columns:
-        return {"error": f"Channel {channel_name} not found"}
-
-    # Aggregate minimum errors per window
-    df_win = sweep_df.groupby("window_size")[col_err].min().reset_index()
-    df_win = df_win.sort_values("window_size")
-
-    windows = df_win["window_size"].values
-    errors = df_win[col_err].values
-
-    # 1. Qualitative Analysis
-    needle_windows = detect_needles_heuristic(windows, errors, max_error_threshold=5.0)
-
-    if len(needle_windows) < 2:
-        return {
-            "status": "FAILED",
-            "reason": "Not enough needle points (<2) found.",
-            "needles_found": list(needle_windows),
-        }
-
-    # 2. Quantitative Analysis
-    refined_period, confidence, gaps = calculate_gap_statistics(needle_windows)
-
+    if len(needle_indices) < 2:
+        return {"mean": 0.0, "std": 0.0, "distribution": []}
+    
+    gaps = np.diff(needle_indices)
     return {
-        "status": "SUCCESS",
-        "dominant_period": round(refined_period, 2),
-        "period_integer": int(round(refined_period)),
-        "confidence_pct": round(confidence, 1),
-        "num_needles": len(needle_windows),
-        "needles": [int(n) for n in needle_windows],
-        "gaps": [float(g) for g in gaps],
+        "mean": float(np.mean(gaps)),
+        "std": float(np.std(gaps)),
+        "distribution": gaps.tolist(),
+        "is_periodic": np.std(gaps) < (0.1 * np.mean(gaps)) if np.mean(gaps) > 0 else False
     }
 
-def print_period_report(report):
+def calculate_peak_correlation(error_curve_a: list, error_curve_b: list) -> float:
     """
-    Outputs the period analysis report to the console.
+    STEP INTENT: Expose similar needle patterns between different sweeps.
+    Correlates peak patterns over stack size and data row range sweeps.
     """
-    print("\n=== Dominant Period Analysis Report ===")
-    if report.get("status") == "FAILED":
-        print("Status: FAILED")
-        print(f"Reason: {report.get('reason')}")
-        return
+    if len(error_curve_a) != len(error_curve_b) or len(error_curve_a) < 2:
+        return 0.0
+    
+    # Standardize to compare peak locations (shape) rather than absolute error
+    a = (error_curve_a - np.mean(error_curve_a)) / (np.std(error_curve_a) + 1e-9)
+    b = (error_curve_b - np.mean(error_curve_b)) / (np.std(error_curve_b) + 1e-9)
+    
+    return float(np.corrcoef(a, b)[0, 1])
 
-    print("Status: SUCCESS")
-    print(f"Dominant Period: {report['dominant_period']} samples")
-    print(f"Confidence: {report['confidence_pct']}%")
-    print(f"Needles Detected: {report['num_needles']}")
-    print(f"Needle Locations (Windows): {report['needles']}")
-    print(f"Detected Gaps: {report['gaps']}")
-    print("=======================================")
+def analyze_period_report(needle_data: dict, correlation_score: float) -> dict:
+    """
+    STEP INTENT: Final qualitative judgment on period consistency.
+    Combines gap distribution and inter-sweep correlation.
+    """
+    confidence = correlation_score * (1.0 - (needle_data['std'] / (needle_data['mean'] + 1e-9)))
+    
+    return {
+        "status": "Periodic" if confidence > 0.7 else "Stochastic",
+        "confidence": max(0.0, float(confidence)),
+        "mean_period": needle_data['mean'],
+        "consistency": needle_data['is_periodic']
+    }
+
+def print_period_report(results: dict):
+    """
+    STEP INTENT: Present structural meta-analysis to the user.
+    """
+    print("\n" + "="*45)
+    print("      QUALITATIVE STRUCTURAL PERIOD REPORT")
+    print("="*45)
+    print(f"Status:             {results['status']}")
+    print(f"Confidence Score:   {results['confidence']:.2%}")
+    print(f"Detected Mean Gap:  {results['mean_period']:.2f}")
+    print(f"Periodic Integrity: {'HIGH' if results['consistency'] else 'LOW'}")
+    print("="*45 + "\n")
+
