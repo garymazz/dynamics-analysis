@@ -1,4 +1,24 @@
-# DMD Tool (v9.4.1)
+# DMD Tool (v9.5.0)
+
+A high-performance, GPU-accelerated framework for time-series forecasting and structural analysis using Dynamic Mode Decomposition (DMD).
+
+This application provides a robust suite of tools for sweeping DMD hyperparameters, detecting dominant temporal periods, running smart ensemble forecasts, and managing large-scale matrix decompositions. You provide it with multi-channel time-series data (like sensor readings or financial metrics), and it rapidly sweeps through thousands of combinations of "Window Sizes" (observation history) and "Stack Sizes" (Hankel Time-Delay Embedding depths).
+
+The forecasting pipeline utilizes GPU acceleration (via PyTorch) to calculate system dynamics, predict future states, and output both flat tabular results (Parquet/Excel) and highly granular HDF5 mathematical tensors.
+
+---
+
+### Key Features
+
+* **Cluster-DMD Forecasting (Smart Mode):** Automates hyperparameter selection by scanning historical data for "optimal needles" (configurations where error drops below a target threshold). It generates resilient ensemble forecasts with integrated uncertainty metrics.
+* **Independent Meta-Analysis Suite:** Decouples "Judgment" from "Math." Specialized modules handle Qualitative Pattern Discovery (Needle/Gap detection), Quantitative Statistical Filtering (Error Thresholding), and Ensemble Aggregation.
+* **Triple-Sweep Period Discovery:** Restored high-dimensional diagnostic capabilities to detect the "Natural Pulse" of a system across Data Row Range, Stack Size, and Window Size dimensions.
+* **Ultra-Granular HDF5 Output (Schema v2.0.0):** Implements a 1-to-1 storage strategy, isolating every stage of the mathematical pipeline (Hankel, SVD, Reduced Operator, etc.) into dedicated atomic files for downstream AI agent consumption.
+* **Micro-Stage Performance Profiling:** Benchmarks execution times for every matrix operation down to the millisecond, enabling detailed hardware utilization analysis.
+* **Stateful Resumption & Crash Recovery:** The `--resume` flag allows the engine to pick up exactly where a killed or crashed run left off by tracking progress in a JSON configuration ledger.
+* **Massively Parallel 3D Tensor Workflow:** Features a `--batch-mode` for DMD evaluations, unfolding the dataset into 3D tensors for simultaneous parallel processing on the GPU.
+
+# DMD Tool (v9.5.0)
 
 A high-performance, GPU-accelerated framework for time-series forecasting and structural analysis using Dynamic Mode Decomposition (DMD).
 
@@ -13,17 +33,18 @@ The forecasting pipeline uses one GPU to calculate the mathematical dynamics of 
 **Key Features**
 
 * **Cluster-DMD Forecasting:** A "smart mode" workflow that automatically scans historical data for optimal reconstruction windows based on dominant period detection, generating ensemble forecasts with uncertainty metrics.
-* **Dominant Period Gap Detection:** A pre-processing signal analyzer that detects dominant temporal frequencies using FFT and Autocorrelation. This helps users narrow down optimal Window Sizes by identifying the natural cyclical "pulse" of the dataset.
-* **Training Reconstruction Error Tracking:** Enables the calculation of reconstruction accuracy on the historical training dataset itself, providing deeper insights into how well the DMD operator models the known system dynamics.
-* **Micro-Stage Performance Profiling:** Deep hardware benchmarking tools that track matrix execution times (Hankel construction, SVD, Operator reduction, and Predictions) down to the millisecond, aggregating results per-row or per-batch for cross-system analysis.
-* **Optimized GPU-Accelerated Math Engine with Interchangeable Solvers:** Leverages PyTorch (torch.linalg.svd) to process massive time-delay embedded Hankel matrices. Features both a Sequential Mode and a massive 3D Batched Tensor Mode. Users can also dynamically swap core linear algebra solvers (e.g., standard Pseudo-Inverse vs. direct Least-Squares) to maximize GPU stability.
-* **Graceful Pause & Save (Ctrl+C):** A single ^C safely pauses the sweep, finishes the active GPU tensor operation, flushes all data to disk, and updates the recovery file so you can resume execution later.
+* **Independent Meta-Analysis Suite:** Implements a strict separation between "Judgment" and "Math". Specialized, decoupled modules handle **Qualitative Pattern Discovery** (Needle and Gap detection), **Quantitative Statistical Filtering** (Error Thresholding), and **Ensemble Aggregation**, ensuring the core mathematical engine remains focused solely on linear algebra stages.
+* **Triple-Sweep Period Discovery:** Restores high-dimensional diagnostic capabilities to identify the "Natural Pulse" of a system. The tool analyzes how accuracy needles distribute and correlate across three distinct dimensions: **Data Row Range** (temporal stability), **Stack Size** (model complexity), and **Window Size** (observation scale).
+* **Dominant Period Gap Detection:** A pre-processing signal analyzer that detects dominant temporal frequencies using FFT and Autocorrelation, helping users narrow down optimal Window Sizes by identifying the natural cyclical "pulse" of the dataset.
+* **Training Reconstruction Error Tracking:** Enables the calculation of reconstruction accuracy on the historical training dataset itself, providing deeper insights into how well the DMD operator models known system dynamics.
+* **Micro-Stage Performance Profiling:** Deep hardware benchmarking tools track matrix execution times for all primary pipeline stages (Hankel, SVD, Operator reduction, and Predictions) down to the millisecond, aggregating results per-row or per-batch for cross-system analysis.
+* **Optimized GPU-Accelerated Math Engine:** Leverages PyTorch (`torch.linalg.svd`) to process massive time-delay embedded Hankel matrices. Features both a Sequential Mode and a massive 3D Batched Tensor Mode with interchangeable solvers (standard Pseudo-Inverse vs. direct Least-Squares) to maximize GPU stability.
+* **Graceful Pause & Save (Ctrl+C):** A single `^C` safely pauses the sweep, finishes the active GPU tensor operation, flushes all data to disk, and updates the recovery file so you can resume execution later.
 * **Deadlock-Safe Termination:** Implements a robust two-stage signal interception mechanism allowing graceful shutdowns during heavy C-extension/GPU workloads, preventing data corruption even if the Python GIL is locked by an unresponsive thread.
-* **Stateful Resumption & Crash Recovery (--resume):** Automatically tracks your hyperparameter configuration using a lightweight state file. If a sweep is interrupted by a power loss or system crash, the \--resume flag seamlessly restarts the process from the exact row and stack size without losing computation time.
-* **Intermediate State, Ultra-Granular 1-to-1 HDF5 Storage:** Writes exact DMD operators, spatial modes, and temporal dynamics to isolated directories. Designed to be perfectly self-describing and natively structured for downstream AI agents.
-* **Fault-Tolerant HDF5 Storage:** Matrix decompositions are written to disk atomically at the end of each pipeline stage. This ensures a system crash will never corrupt previously generated historical data.
-* **Modular Architecture:** Built on the Cement framework, ensuring clean separation of concerns between CLI routing, Pandas I/O, HDF5 management, and pure mathematical operations.
-
+* **Stateful Resumption & Crash Recovery (`--resume`):** Automatically tracks hyperparameter configurations using a lightweight state file. If a sweep is interrupted, the `--resume` flag seamlessly restarts the process from the exact row and stack size without losing computation time.
+* **Ultra-Granular 1-to-1 HDF5 Storage (Schema v2.0.0):** Employs a storage strategy that isolates every stage of the mathematical pipeline (DMD operators, spatial modes, temporal dynamics) into dedicated directories, designed to be perfectly self-describing for downstream AI agents.
+* **Fault-Tolerant HDF5 Storage:** Matrix decompositions are written to disk atomically at the end of each pipeline stage, ensuring that a system crash never corrupts previously generated historical data.
+* **Modular Architecture:** Built on the **Cement framework**, ensuring clean separation of concerns between CLI routing, Pandas I/O, HDF5 management, and pure mathematical operations.
 ---
 
 ## System Architecture
