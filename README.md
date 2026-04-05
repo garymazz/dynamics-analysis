@@ -255,7 +255,39 @@ Files are named using their exact hyperparameter coordinates:
 │   └── (b_real, b_imag as float32)
 └── Prediction/              # Target: pred
     └── (pred_vec_real as float32)
+    
+**Schema Element Descriptions:**
+* **Hankle**
+  * `H`: The full Time-Delay Embedded Hankel Matrix (type: float32).
+  * `X`: The current state matrix (Columns 0 to N-1 of H).
+  * `Y`: The future state matrix (Columns 1 to N of H).
+* **SVD_Truncation**
+  * `U` / `S` / `Vh`: The full Left Singular Vectors, Singular Values, and Right Singular Vectors.
+  * `U_r` / `S_inv` / `V_r`: The rank-truncated representations used for computation.
+  * `r`: The integer value representing the truncation rank boundary.
+* **Reduced_Operator**
+  * `Atilde`: The reduced-order mathematical operator ($\tilde{A}$) driving the system's dynamics.
+* **Eigen**
+  * `eigvals_real` / `eigvals_imag`: The real and imaginary components of the continuous system eigenvalues.
+  * `W_eig_real` / `W_eig_imag`: The real and imaginary components of the operator's eigenvectors.
+* **DMD_Modes**
+  * `Phi_real` / `Phi_imag`: The spatial DMD modes ($\Phi$) mapping the dynamics back to the physical space.
+* **DMD_Amplitudes**
+  * `b_real` / `b_imag`: The initial condition mode amplitudes ($b$).
+* **Prediction**
+  * `pred_vec_real`: The fully reconstructed, continuous future state forecast vector.
 
+**HDF5 Metadata Attributes:**
+Each file is completely self-describing, utilizing a strict metadata schema to ensure traceability.
+* **Global Attributes:** Embedded at the root level of the HDF5 file.
+  * `data_set_identifier`: A string denoting the specific Data Class generating the file (e.g., "Hankle", "SVD_Truncation").
+  * `hierarchical_schema`: A complete JSON string representation of the entire Schema v2.0.0 structure, ensuring downstream agents understand the expected data types without external documentation.
+* **Group Attributes:** Attached directly to the specific internal data group (e.g., `Hankle_ds_1_de_500_ws_350_we_500_s_20`).
+  * `w_start` / `w_end`: The exact starting and ending row indices of the observation window.
+  * `stack_size`: The Time-Delay Embedding depth ($s$) used.
+  * `data_class`: The classification of the matrices contained within.
+  * `data_types`: A list of the specific arrays contained in the group (e.g., `["H", "X", "Y"]`).
+* **Compression Strategy:** To optimize massive SVD sweeps, all multi-dimensional matrices are saved with `gzip` compression (level 4). Singular scalar values (such as the SVD truncation rank `r`) are saved without compression to prevent read overhead.
 
 **HDF5 Metadata Attributes:**
 Each file is completely self-describing, utilizing a strict metadata schema to ensure traceability.
