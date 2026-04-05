@@ -232,18 +232,44 @@ If `--perf` is enabled, records exact sub-millisecond execution times:
 * `stage_7_format_s`: Tabular formatting time.
 
 ### 4. Ultra-Granular HDF5 Output (Schema v2.0.0)
-Isolates every stage of the mathematical pipeline into dedicated directories. Files are named using exact hyperparameter coordinates (e.g., `_ds_100_de_500_ws_350_we_500_s_20.hdf5`).
-```text
+To support downstream Machine Learning workflows, this application utilizes a 1-to-1 HDF5 storage strategy. Every stage of the mathematical pipeline is isolated into its own dedicated directory.
+
+**File Naming Convention:**
+Files are named using their exact hyperparameter coordinates:
+`_ds_[Data Start]_de_[Data End]_ws_[Window Start]_we_[Window End]_s_[Stack Size].hdf5`
+
+**HDF5 Directory Layout & Matrix Schema:**
+
 <output_prefix>_hdf5/  
 ├── Hankle/                  # Target: hankle  
+│   └── (H, X, Y matrices as float32)
 ├── SVD_Truncation/          # Target: svd  
+│   └── (U, S, Vh, U_r, S_inv, V_r as float32; rank 'r' as int32)
 ├── Reduced_Operator/        # Target: dmd-op  
+│   └── (Atilde as float32)
 ├── Eigen/                   # Target: eigen  
+│   └── (eigvals_real, eigvals_imag, W_eig_real, W_eig_imag as float32)
 ├── DMD_Modes/               # Target: dmd-modes  
+│   └── (Phi_real, Phi_imag as float32)
 ├── DMD_Amplitudes/          # Target: dmd_amp  
+│   └── (b_real, b_imag as float32)
 └── Prediction/              # Target: pred
-```
+    └── (pred_vec_real as float32)
 
+
+**HDF5 Metadata Attributes:**
+Each file is completely self-describing, utilizing a strict metadata schema to ensure traceability.
+
+* **Global Attributes:** Embedded at the root level of the HDF5 file.
+  * `data_set_identifier`: A string denoting the specific Data Class generating the file (e.g., "Hankle", "SVD_Truncation").
+  * `hierarchical_schema`: A complete JSON string representation of the entire Schema v2.0.0 structure, ensuring downstream agents understand the expected data types without external documentation.
+* **Group Attributes:** Attached directly to the specific internal data group (e.g., `Hankle_ds_1_de_500_ws_350_we_500_s_20`).
+  * `w_start` / `w_end`: The exact starting and ending row indices of the observation window.
+  * `stack_size`: The Time-Delay Embedding depth ($s$) used.
+  * `data_class`: The classification of the matrices contained within.
+  * `data_types`: A list of the specific arrays contained in the group (e.g., `["H", "X", "Y"]`).
+* **Compression Strategy:** To optimize massive SVD sweeps, all multi-dimensional matrices are saved with `gzip` compression (level 4). Singular scalar values (such as the SVD truncation rank `r`) are saved without compression to prevent read overhead.
+* 
 ### HDF5 Diagnostics & Repair (`hdf5` sub-command)
 ```bash
 # Print the self-describing hierarchical schema of a file
