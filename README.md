@@ -328,6 +328,53 @@ python main.py hdf5 fix output_svd.hdf5
 ### The `--resume` Workflow
 When a sweep is initiated, a temporary state file is generated. Passing the `--resume` flag bypasses standard initialization. It reads the state file, automatically restores your original command-line arguments, safely ignores previously calculated matrices, and picks up exactly where it left off.
 
+**Schema Structure:** A flat JSON dictionary mapping the Cement CLI argument namespaces to their runtime values.
+
+Example:
+{
+    "input": "data.parquet",
+    "output": "sweep_results",
+    "channels": ["S1", "S2", "S3"],
+    "start_row": 1,
+    "end_row": 5000,
+    "min_stack": 5,
+    "max_stack": 41,
+    "min_window": 20,
+    "max_window": 151,
+    "inc_start": true,
+    "batch_mode": false,
+    "format": "parquet",
+    "resume": false,
+    "keep_temp": false,
+    "train_rec": false,
+    "svd_gpu": true,
+    "dmd_lstsq": false,
+    "perf": null,
+    "hdf5": ["all"],
+    "hdf5_dir": null
+}
+
+**Schema Element Descriptions:**
+* `input`: The file path to the source historical data (`.xlsx` or `.parquet`).
+* `output`: The base prefix string used for naming all generated output files and directories.
+* `channels`: A list of strings identifying which column labels from the input data are actively being analyzed.
+* `start_row` / `end_row`: Integer bounds defining the specific temporal span of the dataset targeted for prediction or analysis.
+* `min_stack` / `max_stack`: Integer boundaries defining the minimum and maximum Time-Delay Embedding depths to evaluate.
+* `min_window` / `max_window`: Integer boundaries defining the minimum and maximum observation window sizes (historical lookback length) to evaluate.
+* `inc_start`: Boolean flag indicating if the sweep should iterate forward in time by incrementing the start row.
+* `batch_mode`: Boolean flag enabling the massive 3D Batched Tensor math engine instead of the sequential row-loop.
+* `format`: String (`csv`, `parquet`, or `xlsx`) dictating the final tabular output file format.
+* `resume`: Boolean flag indicating if the current process was launched using the resumption workflow.
+* `keep_temp`: Boolean flag dictating if the application should preserve the `_temp.csv` recovery ledger upon successful completion.
+* `train_rec`: Boolean flag enabling the calculation of reconstruction error on the historical training data.
+* `svd_gpu`: Boolean flag enforcing that Singular Value Decomposition happens on the GPU (default behavior).
+* `dmd_lstsq`: Boolean flag activating the exact direct Least-Squares solver instead of the standard Pseudo-Inverse solver.
+* `perf`: String modifier (e.g., `"con"`) or `null` dictating the verbosity and behavior of the hardware performance profiler.
+* `hdf5`: A list of strings indicating which specific mathematical matrices should be committed to disk (e.g., `["hankle", "svd", "all"]`).
+* `hdf5_dir`: An optional string path allowing the user to redirect the massive HDF5 output directories to a secondary drive.
+
+*Architectural Note:* The active progress coordinates (the exact target row, window size, and stack size where a crash occurred) are intentionally excluded from this JSON. Instead, the `IOManager` dynamically infers the exact resumption coordinate by parsing the last successfully written row in the `<output_prefix>_temp.csv` data buffer. This two-file state tracking design guarantees that the configuration boundaries and the actual data committed to the hard drive are always perfectly synchronized, preventing data duplication or gaps upon resumption.
+
 ---
 
 ## Extending the Framework
